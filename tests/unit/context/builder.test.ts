@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs/promises';
 import { DefaultContextBuilder } from '../../../src/context/builder.js';
 import { GitCLIAdapter } from '../../../src/git/adapter.js';
 import { REDACTION_TOKEN } from '../../../src/context/filter.js';
@@ -55,7 +56,9 @@ describe('DefaultContextBuilder', () => {
       expect(context.diff.insertions).toBeGreaterThan(0);
 
       // Verify repository metadata
-      expect(context.repository.rootPath.toLowerCase()).toBe(fixture.path.toLowerCase());
+      const expectedRoot = await fs.realpath(fixture.repoPath);
+      const actualRoot = await fs.realpath(context.repository.rootPath);
+      expect(actualRoot.toLowerCase()).toBe(expectedRoot.toLowerCase());
       expect(context.repository.headSha).toHaveLength(40);
       expect(context.evidence).toEqual([]);
       expect(context.createdAt).toBeDefined();

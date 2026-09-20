@@ -35,7 +35,9 @@ describe('GitCLIAdapter', () => {
       expect(isRepo).toBe(true);
 
       const root = await adapter.getRepositoryRoot();
-      expect(root.toLowerCase()).toBe(fixture.path.toLowerCase());
+      const expectedRoot = await fs.realpath(fixture.repoPath);
+      const actualRoot = await fs.realpath(root);
+      expect(actualRoot.toLowerCase()).toBe(expectedRoot.toLowerCase());
     });
 
     it('should throw NotAGitRepositoryError when executed outside git repo', async () => {

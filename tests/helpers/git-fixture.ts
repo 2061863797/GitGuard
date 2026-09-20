@@ -145,7 +145,13 @@ export class GitFixture {
 export async function createTempGitRepo(prefix = 'gitguard-fixture-'): Promise<GitFixture> {
   const tmpBase = os.tmpdir();
   const repoDir = await fs.mkdtemp(path.join(tmpBase, prefix));
-  const fixture = new GitFixture(repoDir);
+  let canonicalDir = repoDir;
+  try {
+    canonicalDir = await fs.realpath(repoDir);
+  } catch {
+    // fallback to repoDir
+  }
+  const fixture = new GitFixture(canonicalDir);
 
   // Initialize repo
   await fixture.exec(['init']);

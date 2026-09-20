@@ -221,7 +221,12 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
     const targetCwd = cwd || this.defaultCwd || process.cwd();
     try {
       const res = await this.executeGit(['rev-parse', '--show-toplevel'], targetCwd);
-      const rootPath = path.resolve(res.stdout.trim());
+      let rootPath = path.resolve(res.stdout.trim());
+      try {
+        rootPath = await fs.realpath(rootPath);
+      } catch {
+        // preserve rootPath if realpath resolution fails
+      }
       return toPosixPath(rootPath);
     } catch (err) {
       if (err instanceof NotAGitRepositoryError) {
