@@ -111,6 +111,11 @@ export const GITGUARD_MCP_TOOLS: Tool[] = [
           type: 'string',
           description: 'Optional task context.',
         },
+        scope: {
+          type: 'string',
+          enum: ['staged', 'working', 'all', 'commit', 'range'],
+          description: "Git change scope to evaluate during verification. Default: 'all'.",
+        },
         cwd: {
           type: 'string',
           description: 'Optional working directory path.',
@@ -182,6 +187,7 @@ export async function executeMcpTool(
           task: params.task,
           scope: params.scope ?? 'all',
           cwd,
+          checkDeterministic: false,
         });
 
         const taskCompProb =
@@ -267,6 +273,7 @@ export async function executeMcpTool(
         const report = await engine.verify({
           findingIds,
           task: params.task,
+          scope: params.scope,
           cwd: params.cwd,
         });
 

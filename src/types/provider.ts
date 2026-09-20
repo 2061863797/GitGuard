@@ -173,6 +173,28 @@ export interface SemanticQuestion {
 }
 
 /**
+ * Provider execution metadata tracking model versions, fallback states, and latency.
+ */
+export interface ProviderMetadata {
+  /** Configured provider name (e.g., 'typesafe') */
+  requestedProvider: string;
+  /** Actual provider that executed the evaluation (e.g., 'typesafe' or 'mock') */
+  effectiveProvider: string;
+  /** Name of the requested model (e.g., 'jev-latest') */
+  requestedModel?: string;
+  /** Name/version of the effective model resolved by the API */
+  effectiveModel?: string;
+  /** Whether a fallback occurred during evaluation */
+  fallback: boolean;
+  /** Diagnostic reason if fallback occurred */
+  fallbackReason?: string;
+  /** Total evaluation round-trip latency in milliseconds */
+  latencyMs?: number;
+  /** Number of evaluated questions */
+  questionsCount?: number;
+}
+
+/**
  * Structured semantic decision returned by a DecisionProvider.
  */
 export interface SemanticDecision {
@@ -190,6 +212,16 @@ export interface SemanticDecision {
   provider: string;
   /** Short explanation or rationale, if returned by the provider */
   rationale?: string;
+  /** Metadata on provider execution and fallback observability */
+  metadata?: ProviderMetadata;
+}
+
+/**
+ * Aggregated report of a semantic evaluation run.
+ */
+export interface SemanticRunReport {
+  decisions: SemanticDecision[];
+  metadata: ProviderMetadata;
 }
 
 /**
@@ -213,6 +245,13 @@ export interface DecisionProvider {
     context: EvaluationContext,
     questions: SemanticQuestion[]
   ): Promise<SemanticDecision[]>;
+  /**
+   * Evaluate a batch of semantic questions and return explicit execution metadata.
+   */
+  evaluateWithReport?(
+    context: EvaluationContext,
+    questions: SemanticQuestion[]
+  ): Promise<SemanticRunReport>;
 }
 
 /**

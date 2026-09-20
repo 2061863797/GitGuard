@@ -57,6 +57,8 @@ export interface CheckOptions extends InspectOptions {
   failOnWarn?: boolean;
   /** Force offline deterministic mock semantic provider */
   offline?: boolean;
+  /** Disallow mock fallback; exit with code 2 if TypeSafe Jev is unavailable */
+  requireSemantic?: boolean;
   /** Bypass evaluation cache in .git/gitguard/cache/ */
   noCache?: boolean;
   /** Restrict evaluation to specific finding IDs */

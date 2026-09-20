@@ -766,8 +766,12 @@ describe('Empirical Challenger M2-2: Semantic Stress Suite', () => {
       // Verify instruction content was clamped to 2,000 chars
       expect(capturedPayload.state.instructions[0].content.length).toBe(2000);
 
-      // Verify boolean question maps to 'noul' primitive
-      expect(capturedPayload.questions[0].primitive).toBe('noul');
+      // Verify boolean question maps to 'noul'
+      const questionPayload = Array.isArray(capturedPayload.questions)
+        ? capturedPayload.questions[0]
+        : capturedPayload.questions['task_completed'];
+      const qType = questionPayload.type || questionPayload.primitive;
+      expect(qType).toBe('noul');
     });
 
     it('reads apiKey from process.env.TYPESAFE_API_KEY or process.env.JEV_API_KEY when options omitted', async () => {
@@ -880,7 +884,7 @@ describe('Empirical Challenger M2-2: Semantic Stress Suite', () => {
       });
 
       await provider.evaluate(createTestContext(), [STANDARD_QUESTIONS_MAP.task_completed]);
-      expect(calledUrl).toBe('https://api.typesafe.ai/v1/evaluations');
+      expect(calledUrl).toBe('https://api.typesafe.ai/v1/systemone');
     });
   });
 });

@@ -21,6 +21,47 @@ import {
   normalizeAffectedFiles,
   normalizeHunk,
 } from './fingerprint.js';
+import { FindingStore, FileFindingStore, MemoryFindingStore } from './store.js';
+
+/**
+ * Calculates a match score between a fresh finding and a previous active finding.
+ * High score (>= 0.70) indicates the finding refers to the same defect and should be tracked.
+ */
+function calculateFindingMatchScore(fresh: Finding, prev: Finding): number {
+  if (fresh.fingerprint && prev.fingerprint && fresh.fingerprint === prev.fingerprint) {
+    return 1.0;
+  }
+
+  let score = 0;
+  const freshCleanRule = fresh.ruleId.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+  const prevCleanRule = (prev.ruleId || '').replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+
+  if (freshCleanRule === prevCleanRule) {
+    score += 0.35;
+  }
+
+  // Check affected files overlap
+  const freshFiles = new Set(fresh.affectedFiles || []);
+  const prevFiles = new Set(prev.affectedFiles || []);
+  let commonCount = 0;
+  for (const f of freshFiles) {
+    if (prevFiles.has(f)) commonCount++;
+  }
+
+  if (commonCount > 0) {
+    if (freshFiles.size === prevFiles.size && commonCount === freshFiles.size) {
+      score += 0.45;
+    } else {
+      score += 0.35;
+    }
+  }
+
+  if (fresh.source && prev.source && fresh.source === prev.source) {
+    score += 0.10;
+  }
+
+  return score;
+}
 
 /**
  * Returns standard actionable remediation instructions for a rule violation
@@ -127,6 +168,15 @@ function synthesizeFindingsVerdict(findings: Finding[]): GateVerdict {
  */
 export class DefaultFindingManager implements FindingManager {
   private findingsStore: Map<string, Finding> = new Map();
+  private persistentStore?: FindingStore;
+
+  constructor(options?: { store?: FindingStore; repoRoot?: string }) {
+    if (options?.store) {
+      this.persistentStore = options.store;
+    } else if (options?.repoRoot) {
+      this.persistentStore = new FileFindingStore(options.repoRoot);
+    }
+  }
 
   /**
    * Instantiates structured Finding objects from evaluated RuleMatch instances and context.
@@ -268,34 +318,36 @@ export class DefaultFindingManager implements FindingManager {
       }
     }
 
-    // Pass 2: ruleId match (for findings of the same rule where diff hunks evolved)
+    // Pass 2: Weighted similarity match (ruleId + file overlap + source >= 0.70)
     for (let i = 0; i < (freshFindings || []).length; i++) {
       if (matchedFreshIndices.has(i)) continue;
       const fresh = freshFindings[i];
-      const freshCleanRule = fresh.ruleId.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+
+      let bestPrevMatch: Finding | null = null;
+      let highestScore = 0;
 
       for (const prev of previousFindings || []) {
         if (matchedPrevIds.has(prev.id)) continue;
-        const prevCleanRule = (prev.ruleId || '').replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase();
+        const score = calculateFindingMatchScore(fresh, prev);
 
-        if (
-          freshCleanRule === prevCleanRule ||
-          prev.id.toLowerCase().includes(freshCleanRule) ||
-          fresh.id.toLowerCase().includes(prevCleanRule)
-        ) {
-          matchedPrevIds.add(prev.id);
-          matchedFreshIndices.add(i);
-          const persistentFinding: Finding = {
-            ...fresh,
-            id: prev.id,
-            createdAt: prev.createdAt,
-            lifecycle: 'active',
-          };
-          remainingFindings.push(persistentFinding);
-          remainingFindingIds.push(prev.id);
-          this.findingsStore.set(prev.id, persistentFinding);
-          break;
+        if (score >= 0.70 && score > highestScore) {
+          highestScore = score;
+          bestPrevMatch = prev;
         }
+      }
+
+      if (bestPrevMatch) {
+        matchedPrevIds.add(bestPrevMatch.id);
+        matchedFreshIndices.add(i);
+        const persistentFinding: Finding = {
+          ...fresh,
+          id: bestPrevMatch.id,
+          createdAt: bestPrevMatch.createdAt,
+          lifecycle: 'active',
+        };
+        remainingFindings.push(persistentFinding);
+        remainingFindingIds.push(bestPrevMatch.id);
+        this.findingsStore.set(bestPrevMatch.id, persistentFinding);
       }
     }
 
@@ -320,6 +372,21 @@ export class DefaultFindingManager implements FindingManager {
         };
         this.findingsStore.set(prev.id, resolvedFinding);
       }
+    }
+
+    // Persist finding state changes
+    if (this.persistentStore) {
+      const allToSave = [...remainingFindings];
+      for (const prev of previousFindings || []) {
+        if (!matchedPrevIds.has(prev.id)) {
+          allToSave.push({
+            ...prev,
+            lifecycle: 'resolved',
+            resolvedAt,
+          });
+        }
+      }
+      this.persistentStore.save(allToSave).catch(() => {});
     }
 
     // 3. Compute overall status from active remaining findings
@@ -384,10 +451,32 @@ export class DefaultFindingManager implements FindingManager {
   }
 
   /**
+   * Asynchronously reads findings from the persistent store, refreshing internal memory.
+   */
+  public async loadPersistentFindings(filter?: FindingFilter): Promise<Finding[]> {
+    if (this.persistentStore) {
+      try {
+        const persisted = await this.persistentStore.list(filter);
+        for (const f of persisted) {
+          if (!this.findingsStore.has(f.id)) {
+            this.findingsStore.set(f.id, f);
+          }
+        }
+      } catch {
+        // ignore storage read errors
+      }
+    }
+    return this.getFindings(filter);
+  }
+
+  /**
    * Manually adds or updates a finding in the internal store.
    */
   public storeFinding(finding: Finding): void {
     this.findingsStore.set(finding.id, finding);
+    if (this.persistentStore) {
+      this.persistentStore.save([finding]).catch(() => {});
+    }
   }
 
   /**

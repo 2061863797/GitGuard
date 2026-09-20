@@ -2,7 +2,7 @@
 
 [![Node Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-678%20passed-success.svg)](https://vitest.dev/)
+[![Tests](https://img.shields.io/badge/tests-684%20passed-success.svg)](https://vitest.dev/)
 [![Semantic Engine](https://img.shields.io/badge/Semantic%20Engine-TypeSafe%20%2F%20Jev-FF6B6B.svg)](https://typesafe.ai/)
 [![Protocol](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -88,7 +88,7 @@ GitGuard decouples interface adapters from the central verification engine. All 
 │                        GITGUARD CORE ENGINE                            │
 ├────────────────────────────────────────────────────────────────────────┤
 │ • Git Read Adapter: Safe, read-only extraction of working/staged state │
-│ • Context Builder: Diff parsing, AST surrounding lines, test discovery │
+│ • Context Builder: Diff parsing, Hunk-adjacent source context, test discovery │
 │ • Policy Engine: Rule evaluation, threshold matching, gate synthesis   │
 │ • Finding Manager: SHA-256 fingerprinting, evidence requirements       │
 │ • Gate Verifier: Closed-loop resolution confirmation                   │
@@ -587,9 +587,11 @@ Operational gate behavior:
 GitGuard is built with defense-in-depth principles:
 
 1. **Read-Only Git Operations**: All git inspections execute non-mutating commands (`git diff`, `git status`, `git show`). GitGuard will never mutate staging, alter commits, or modify your working tree.
-2. **Command Sandbox**: Subprocesses run through `execFile` without shell interpolation (`shell: false`), disallowing command chaining (`&&`, `;`, `|`), redirection, or shell metacharacter injection.
-3. **Diff Secret Redaction**: Built-in credential scanners scan added lines for high-entropy tokens, AWS keys, GitHub PATs, and private keys. Matches are redacted in memory before any external API transmission.
-4. **Prompt Injection Resilience**: Repository instructions and user task statements are structured into typed JSON context fields rather than free-form string templates, preventing diff contents from overriding verification directives.
+2. **Dual Evaluation Contexts**: Complete separation between `RawRepositoryContext` (used by local deterministic checks to catch hardcoded secrets in `.env` and diffs) and `SemanticEvaluationContext` (sanitized and redacted before sending to external AI models).
+3. **Command Sandbox**: Subprocesses run through `execFile` without shell interpolation (`shell: false`), disallowing command chaining (`&&`, `;`, `|`), redirection, or shell metacharacter injection.
+4. **Prompt Injection Mitigation**: Evaluation questions use typed primitives (`noul`, `choice`, `score`) with explicit instructions rather than free-form unconstrained prompts, preventing diff contents from hijacking verification results.
+
+For complete details on our threat model and security boundaries, see [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -599,7 +601,7 @@ GitGuard is built with defense-in-depth principles:
 The repository includes a comprehensive test suite covering unit tests, stress suites, adversarial edge cases, and CLI/MCP integration:
 
 ```bash
-# Run full Vitest suite (678+ tests)
+# Run full Vitest suite (684+ tests)
 pnpm test
 
 # Run unit tests only

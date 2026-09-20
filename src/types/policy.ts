@@ -138,6 +138,8 @@ export interface SystemOneConfig {
   timeout_ms?: number;
   /** Optional API Key (defaults to TYPESAFE_API_KEY environment variable) */
   apiKey?: string;
+  /** Optional base API URL (default: https://api.typesafe.ai/v1) */
+  baseUrl?: string;
 }
 
 /**

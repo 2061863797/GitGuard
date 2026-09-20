@@ -148,7 +148,7 @@ export class DeterministicMockProvider implements DecisionProvider {
     }
 
     const diffText = (context.diff?.raw || '').toLowerCase();
-    const fileNames = (context.diff?.files || []).map((f) => f.newPath.toLowerCase()).join(' ');
+    const fileNames = (context.diff?.files || []).map((f) => (f.newPath || f.oldPath || '').toLowerCase()).join(' ');
     const searchCorpus = `${diffText} ${fileNames}`;
 
     const matches = keywords.filter((k) => searchCorpus.includes(k.toLowerCase())).length;

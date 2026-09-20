@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import type {
   ContextBuilder,
   ContextBuildOptions,
+  DualEvaluationContext,
   EvaluationContext,
   FileContext,
   InstructionContext,
@@ -85,8 +86,19 @@ export class DefaultContextBuilder implements ContextBuilder {
 
   /**
    * Synthesize complete EvaluationContext for the given repository and options.
+   * Returns the sanitized semantic evaluation context by default.
    */
   public async buildContext(options: ContextBuildOptions = {}): Promise<EvaluationContext> {
+    const dual = await this.buildDualContext(options);
+    return dual.semanticContext;
+  }
+
+  /**
+   * Synthesizes dual evaluation contexts:
+   * - rawContext: Unsanitized, retains full diffs (including .env) for local deterministic checkers.
+   * - semanticContext: Sanitized, secret-redacted with sensitive file diffs omitted for external AI models.
+   */
+  public async buildDualContext(options: ContextBuildOptions = {}): Promise<DualEvaluationContext> {
     const cwd = options.cwd ? path.resolve(options.cwd) : process.cwd();
     const scope = options.scope || 'staged';
     const budget = {
@@ -145,7 +157,7 @@ export class DefaultContextBuilder implements ContextBuilder {
     );
 
     // Assemble initial context
-    let evaluationContext: EvaluationContext = {
+    let rawContext: EvaluationContext = {
       task: taskContext,
       diff: diffContext,
       files: fileContexts,
@@ -157,14 +169,18 @@ export class DefaultContextBuilder implements ContextBuilder {
     };
 
     // 7. Context budget management: ensure total context conforms to maxTotalChars
-    evaluationContext = this.enforceTotalBudget(evaluationContext, budget.maxTotalChars);
+    rawContext = this.enforceTotalBudget(rawContext, budget.maxTotalChars);
 
-    // 8. Privacy & secret redaction
+    // 8. Privacy & secret redaction for semantic context
+    let semanticContext: EvaluationContext = JSON.parse(JSON.stringify(rawContext));
     if (options.privacy?.redactSecrets !== false) {
-      evaluationContext = sanitizeEvaluationContext(evaluationContext, options.privacy);
+      semanticContext = sanitizeEvaluationContext(semanticContext, options.privacy);
     }
 
-    return evaluationContext;
+    return {
+      rawContext,
+      semanticContext,
+    };
   }
 
   /**
@@ -207,17 +223,35 @@ export class DefaultContextBuilder implements ContextBuilder {
     }
 
     const trimmed = taskStr.trim();
-    const tokens = trimmed
+    const keywordsSet = new Set<string>();
+
+    // 1. Extract alphanumeric words
+    const words = trimmed
       .toLowerCase()
       .split(/[^a-zA-Z0-9_\-]+/)
       .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+    for (const w of words) {
+      keywordsSet.add(w);
+    }
 
-    const uniqueKeywords = Array.from(new Set(tokens));
+    // 2. Extract CJK phrases & 2-grams for Chinese/Japanese/Korean tasks
+    const cjkMatches = trimmed.match(/[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]+/g);
+    if (cjkMatches) {
+      for (const phrase of cjkMatches) {
+        if (phrase.length >= 2) {
+          keywordsSet.add(phrase.toLowerCase());
+          // Extract 2-gram fragments for sub-phrase matching
+          for (let i = 0; i < phrase.length - 1; i++) {
+            keywordsSet.add(phrase.substring(i, i + 2).toLowerCase());
+          }
+        }
+      }
+    }
 
     return {
       task: trimmed,
       taskPresent: true,
-      keywords: uniqueKeywords,
+      keywords: Array.from(keywordsSet),
       source: 'cli',
     };
   }

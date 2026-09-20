@@ -22,6 +22,7 @@ export interface CheckCliOptions {
   failOnWarn?: boolean;
   offline?: boolean;
   mock?: boolean;
+  requireSemantic?: boolean;
   noCache?: boolean;
   findingIds?: string[];
   findings?: string;
@@ -65,6 +66,7 @@ export async function checkCommand(
       strict: options.strict,
       failOnWarn: options.failOnWarn,
       offline: options.offline || options.mock,
+      requireSemantic: options.requireSemantic,
       noCache: options.noCache,
       findingIds,
     };
@@ -77,6 +79,12 @@ export async function checkCommand(
       : formatCheckText(result);
 
     if (!options.silent) {
+      // Print explicit warning if semantic fallback occurred
+      const decisionsList = Object.values(result.semanticDecisions || {});
+      const hasFallback = decisionsList.some((d) => d.metadata?.fallback === true);
+      if (hasFallback && !isJson) {
+        console.warn('\n⚠️  WARNING: TypeSafe Jev unavailable. Evaluated using offline fallback provider.');
+      }
       console.log(output);
     }
 

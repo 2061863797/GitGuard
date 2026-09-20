@@ -423,12 +423,25 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       throw err;
     }
 
-    // Include untracked files if requested
-    if (options?.includeUntracked) {
+    // Include untracked files by default for working and all scopes, unless explicitly disabled
+    const shouldIncludeUntracked =
+      options?.includeUntracked !== false &&
+      (options?.includeUntracked === true || scope === 'working' || scope === 'working-tree' || scope === 'all');
+
+    if (shouldIncludeUntracked) {
       const status = await this.getStatus(targetCwd);
       for (const untracked of status.untrackedFiles) {
         if (
-          options.pathFilters &&
+          untracked === '.gitguard.yml' ||
+          untracked === '.gitguard.yaml' ||
+          untracked.startsWith('.git/') ||
+          untracked.startsWith('.git\\')
+        ) {
+          continue;
+        }
+
+        if (
+          options?.pathFilters &&
           options.pathFilters.length > 0 &&
           !options.pathFilters.some((f) => untracked.startsWith(f) || untracked === f)
         ) {

@@ -178,9 +178,22 @@ export interface EvaluationContext {
 }
 
 /**
+ * Dual context bundle containing both the raw (unsanitized) context for local
+ * deterministic checks and the sanitized context for external semantic evaluators.
+ */
+export interface DualEvaluationContext {
+  /** Unsanitized repository context with unmodified diffs and raw credentials */
+  rawContext: EvaluationContext;
+  /** Sanitized evaluation context with redacted credentials and sensitive diffs omitted */
+  semanticContext: EvaluationContext;
+}
+
+/**
  * Builder interface for assembling EvaluationContext.
  */
 export interface ContextBuilder {
   /** Construct an EvaluationContext based on repository state and options */
   buildContext(options: ContextBuildOptions): Promise<EvaluationContext>;
+  /** Construct dual contexts: raw for local tools, sanitized for external models */
+  buildDualContext?(options: ContextBuildOptions): Promise<DualEvaluationContext>;
 }

@@ -58,6 +58,7 @@ export function createCliProgram(): Command {
     .option('--fail-on-warn', 'Cause WARN verdict to yield non-zero exit code')
     .option('--offline', 'Force local offline/mock semantic provider')
     .option('--mock', 'Alias for --offline')
+    .option('--require-semantic', 'Require live TypeSafe Jev provider; exit with code 2 if unavailable')
     .option('--no-cache', 'Bypass evaluation cache')
     .option('--findings <ids>', 'Comma-separated list of finding IDs to check')
     .option('--cwd <path>', 'Repository working directory path')

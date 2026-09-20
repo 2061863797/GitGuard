@@ -36,8 +36,10 @@ import { TypeSafeSystemOneProvider } from '../analysis/semantic/typesafe-provide
 import { STANDARD_QUESTIONS_MAP } from '../analysis/semantic/questions.js';
 import { DefaultPolicyEngine } from '../policy/engine.js';
 import { DefaultFindingManager } from '../findings/manager.js';
+import { FileFindingStore } from '../findings/store.js';
 import { loadConfig } from '../policy/config.js';
 import { NotAGitRepositoryError } from '../types/errors.js';
+import { SemanticCache } from '../cache/semantic-cache.js';
 
 /**
  * Dependency injection options for DefaultGitGuardEngine.
@@ -290,8 +292,8 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         ? options.task
         : options.task?.task;
 
-    // 1. Build evaluation context
-    const context = await this.contextBuilder.buildContext({
+    // 1. Build dual evaluation context: rawContext for local tools, semanticContext for external AI
+    const buildOptions = {
       scope,
       diffOptions: diffOpts,
       cwd,
@@ -303,13 +305,27 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         maxRelatedTestFiles: config.context?.related_tests?.max_files,
         maxInstructionChars: config.context?.instructions?.max_chars,
       },
-    });
+      privacy: {
+        redactSecrets: config.privacy?.redact_secrets,
+        includeFullFiles: config.privacy?.include_full_files,
+        excludePatterns: config.privacy?.exclude_paths,
+      },
+      policyConfigPath: options.configPath,
+    };
 
+    const { rawContext, semanticContext } = this.contextBuilder.buildDualContext
+      ? await this.contextBuilder.buildDualContext(buildOptions)
+      : {
+          rawContext: await this.contextBuilder.buildContext(buildOptions),
+          semanticContext: await this.contextBuilder.buildContext(buildOptions),
+        };
+
+    const context = semanticContext;
     const changedFiles = context.diff?.files || [];
     const isCleanChangeset =
       changedFiles.length === 0 && (!context.diff?.raw || context.diff.raw.trim().length === 0);
 
-    // 2. Execute deterministic checks
+    // 2. Execute deterministic checks against rawContext (ensures secrets in .env are caught locally)
     let deterministicResults: DeterministicResult[];
     if (isCleanChangeset) {
       deterministicResults = [
@@ -347,22 +363,35 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
           summary: 'Skipped typecheck: clean changeset with zero modifications',
         });
       }
+    } else if (options.checkDeterministic === false) {
+      deterministicResults = [];
     } else {
       deterministicResults = await this.deterministicRunner.run(
-        context,
+        rawContext,
         toDeterministicRunnerConfig(config.deterministic)
       );
     }
 
-    // 3. Determine semantic provider
+    // 3. Determine semantic provider with explicit configuration wiring
     const isOffline =
       options.offline ||
-      config.system_one?.provider === 'mock' ||
-      !process.env.TYPESAFE_API_KEY;
+      config.system_one?.provider === 'mock';
 
-    const provider: DecisionProvider = isOffline
-      ? this.mockProvider
-      : this.typesafeProvider;
+    let provider: DecisionProvider;
+    if (isOffline) {
+      provider = this.mockProvider;
+    } else if (this.typesafeProvider instanceof TypeSafeSystemOneProvider) {
+      provider = new TypeSafeSystemOneProvider({
+        apiKey: config.system_one?.apiKey,
+        baseUrl: config.system_one?.baseUrl,
+        model: config.system_one?.model || 'jev-latest',
+        timeoutMs: config.system_one?.timeout_ms,
+        strict: Boolean(options.strict || options.requireSemantic),
+        fallbackProvider: this.mockProvider,
+      });
+    } else {
+      provider = this.typesafeProvider;
+    }
 
     // 4. Assemble semantic questions
     const questions: SemanticQuestion[] = [];
@@ -411,61 +440,92 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     }
 
     // 5. Evaluate semantic decisions
-    const rawDecisions = isCleanChangeset
-      ? [
-          {
-            id: 'task_completed',
-            probability: 1.0,
-            confidence: 1.0,
-            provider: provider.name,
-            rationale: 'Clean changeset with zero modifications',
-          },
-          {
-            id: 'task_scope_match',
-            probability: 1.0,
-            confidence: 1.0,
-            provider: provider.name,
-            rationale: 'Clean changeset with zero modifications',
-          },
-          {
-            id: 'unrelated_changes',
-            probability: 0.0,
-            confidence: 1.0,
-            provider: provider.name,
-            rationale: 'Clean changeset with zero modifications',
-          },
-          {
-            id: 'tests_required',
-            probability: 0.0,
-            confidence: 1.0,
-            provider: provider.name,
-            rationale: 'Clean changeset with zero modifications',
-          },
-          {
-            id: 'security_sensitive_change',
-            probability: 0.0,
-            confidence: 1.0,
-            provider: provider.name,
-            rationale: 'Clean changeset with zero modifications',
-          },
-          {
-            id: 'security_sensitive',
-            probability: 0.0,
-            confidence: 1.0,
-            provider: provider.name,
-            rationale: 'Clean changeset with zero modifications',
-          },
-          {
-            id: 'regression_risk',
-            value: 'negligible',
-            score: 0.0,
-            confidence: 1.0,
-            provider: provider.name,
-            rationale: 'Clean changeset with zero modifications',
-          },
-        ]
-      : await provider.evaluate(context, questions);
-    const semanticDecisions: SemanticDecision[] = [...rawDecisions];
+    // 5. Evaluate semantic questions with caching
+    const cacheEnabled = !options.noCache && config.gate?.cache?.enabled !== false;
+    const cache = new SemanticCache(context.repository?.rootPath ?? cwd, cacheEnabled);
+    const rawDiffText = context.diff?.raw || '';
+    const taskKey = context.task?.task || '';
+    const modelKey = config.system_one?.model || 'jev-latest';
+    const cacheKey = cache.computeKey(rawDiffText, taskKey, modelKey, questions.map((q) => q.id));
+
+    let semanticDecisions: SemanticDecision[] = [];
+    let cacheHit = false;
+
+    if (isCleanChangeset) {
+      semanticDecisions = [
+        {
+          id: 'task_completed',
+          probability: 1.0,
+          confidence: 1.0,
+          provider: provider.name,
+          rationale: 'Clean changeset with zero modifications',
+        },
+        {
+          id: 'task_scope_match',
+          probability: 1.0,
+          confidence: 1.0,
+          provider: provider.name,
+          rationale: 'Clean changeset with zero modifications',
+        },
+        {
+          id: 'unrelated_changes',
+          probability: 0.0,
+          confidence: 1.0,
+          provider: provider.name,
+          rationale: 'Clean changeset with zero modifications',
+        },
+        {
+          id: 'tests_required',
+          probability: 0.0,
+          confidence: 1.0,
+          provider: provider.name,
+          rationale: 'Clean changeset with zero modifications',
+        },
+        {
+          id: 'security_sensitive_change',
+          probability: 0.0,
+          confidence: 1.0,
+          provider: provider.name,
+          rationale: 'Clean changeset with zero modifications',
+        },
+        {
+          id: 'security_sensitive',
+          probability: 0.0,
+          confidence: 1.0,
+          provider: provider.name,
+          rationale: 'Clean changeset with zero modifications',
+        },
+        {
+          id: 'regression_risk',
+          value: 'negligible',
+          score: 0.0,
+          confidence: 1.0,
+          provider: provider.name,
+          rationale: 'Clean changeset with zero modifications',
+        },
+      ];
+    } else {
+      if (cacheEnabled) {
+        const cached = await cache.get(cacheKey);
+        if (cached && cached.length > 0) {
+          semanticDecisions = cached;
+          cacheHit = true;
+        }
+      }
+
+      if (!cacheHit) {
+        if (typeof (provider as any).evaluateWithReport === 'function') {
+          const report = await (provider as any).evaluateWithReport(semanticContext, questions);
+          semanticDecisions = report.decisions;
+        } else {
+          semanticDecisions = await provider.evaluate(semanticContext, questions);
+        }
+
+        if (cacheEnabled && semanticDecisions.length > 0) {
+          await cache.set(cacheKey, provider.name, modelKey, semanticDecisions);
+        }
+      }
+    }
 
     // Ensure security_sensitive alias is available if security_sensitive_change was evaluated
     const secDecision = semanticDecisions.find((d) => d.id === 'security_sensitive_change');
@@ -500,12 +560,24 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
 
     // 8. Compute suggested process exit code
     let exitCode = 0;
-    if (evalResult.verdict === 'BLOCK') {
+    const blockOnList = config.gate?.block_on || ['BLOCK'];
+
+    if (evalResult.verdict === 'BLOCK' || blockOnList.includes(evalResult.verdict)) {
       exitCode = 1;
     } else if (evalResult.verdict === 'REVIEW' && options.strict) {
       exitCode = 1;
     } else if (evalResult.verdict === 'WARN' && (options.strict || options.failOnWarn)) {
       exitCode = 1;
+    }
+
+    // Check requireSemantic failure: exit code 2 if Jev was unavailable or fell back to mock
+    if (options.requireSemantic) {
+      const isFallback =
+        provider.name === 'mock' ||
+        semanticDecisions.some((d) => d.metadata?.fallback === true);
+      if (isFallback) {
+        exitCode = 2;
+      }
     }
 
     const checkResult: CheckResult = {
@@ -532,10 +604,19 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         timestamp: new Date().toISOString(),
         gitRoot: context.repository?.rootPath ?? cwd,
         headSha: context.repository?.headSha ?? '',
-        cacheHit: false,
+        cacheHit,
       },
       exitCode,
     };
+
+    if (checkResult.findings && checkResult.findings.length > 0) {
+      try {
+        const store = new FileFindingStore(cwd);
+        await store.save(checkResult.findings);
+      } catch {
+        // ignore storage write errors
+      }
+    }
 
     return checkResult;
   }
@@ -559,12 +640,24 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
 
     // 2. Retrieve previous findings to evaluate
     let previousFindings: Finding[] = [];
+    let storedMap: Map<string, Finding> | undefined;
 
     if (options.findingIds && options.findingIds.length > 0) {
-      const allStored = this.findingManager.getFindings
-        ? this.findingManager.getFindings()
-        : [];
-      const storedMap = new Map(allStored.map((f) => [f.id, f]));
+      let allStored: Finding[] = [];
+      try {
+        const store = new FileFindingStore(cwd);
+        allStored = await store.list();
+      } catch {
+        // ignore
+      }
+      if (allStored.length === 0) {
+        if (typeof (this.findingManager as any).loadPersistentFindings === 'function') {
+          allStored = await (this.findingManager as any).loadPersistentFindings();
+        } else if (this.findingManager.getFindings) {
+          allStored = this.findingManager.getFindings();
+        }
+      }
+      storedMap = new Map<string, Finding>(allStored.map((f: Finding) => [f.id, f]));
 
       for (const id of options.findingIds) {
         const stored = storedMap.get(id);
@@ -596,9 +689,20 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         }
       }
     } else {
-      previousFindings = this.findingManager.getFindings
-        ? this.findingManager.getFindings({ lifecycle: 'active' })
-        : [];
+      let activeStored: Finding[] = [];
+      try {
+        const store = new FileFindingStore(cwd);
+        activeStored = await store.list({ lifecycle: 'active' });
+      } catch {
+        // ignore
+      }
+      if (activeStored.length > 0) {
+        previousFindings = activeStored;
+      } else {
+        previousFindings = this.findingManager.getFindings
+          ? this.findingManager.getFindings({ lifecycle: 'active' })
+          : [];
+      }
     }
 
     // 3. Resolve previous findings against fresh findings
@@ -620,6 +724,27 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       }
     }
 
+    // Persist resolution state back to repository finding store
+    try {
+      const store = new FileFindingStore(cwd);
+      const allToSave = [...report.findings];
+      for (const id of report.resolved || []) {
+        const prev = storedMap ? storedMap.get(id) : previousFindings.find((p) => p.id === id);
+        if (prev) {
+          allToSave.push({
+            ...prev,
+            lifecycle: 'resolved',
+            resolvedAt: new Date().toISOString(),
+          });
+        }
+      }
+      if (allToSave.length > 0) {
+        await store.save(allToSave);
+      }
+    } catch {
+      // ignore
+    }
+
     // Merge check context and metadata
     report.task = freshCheck.task;
     report.diffSummary = freshCheck.diffSummary;
@@ -634,6 +759,9 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
    * Retrieves active or filtered findings from the finding manager.
    */
   public async getFindings(filter?: FindingFilter): Promise<Finding[]> {
+    if (typeof (this.findingManager as any).loadPersistentFindings === 'function') {
+      return await (this.findingManager as any).loadPersistentFindings(filter);
+    }
     if (this.findingManager.getFindings) {
       return this.findingManager.getFindings(filter);
     }

@@ -12,6 +12,7 @@ import type {
   FindingLifecycleState,
 } from '../../types/finding.js';
 import { DefaultGitGuardEngine } from '../../core/engine.js';
+import { FileFindingStore } from '../../findings/store.js';
 import { formatFindingsText } from './formatters.js';
 
 export interface FindingsCliOptions {
@@ -39,7 +40,11 @@ export async function findingsCommand(
       lifecycle: options.lifecycle?.toLowerCase() as FindingLifecycleState,
     };
 
-    const findings = engine.getFindings ? await engine.getFindings(filter) : [];
+    let findings = engine.getFindings ? await engine.getFindings(filter) : [];
+    if (findings.length === 0 && options.cwd) {
+      const store = new FileFindingStore(options.cwd);
+      findings = await store.list(filter);
+    }
 
     const isJson = options.json === true || options.format === 'json';
     const output = isJson

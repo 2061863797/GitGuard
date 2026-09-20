@@ -1,0 +1,84 @@
+# Security Policy & Threat Model
+
+GitGuard takes software security, data privacy, and agent verification integrity seriously. This document outlines our security architecture, threat model, boundaries, and disclosure process.
+
+---
+
+## 1. Threat Model & Security Boundaries
+
+GitGuard operates as a repository-aware verification engine that interacts with local git repositories, local tools/subprocesses, and optional remote AI decision providers (TypeSafe / Jev).
+
+### Architectural Boundaries
+
+```text
+┌────────────────────────────────────────────────────────┐
+│                   Untrusted Environment                │
+│    (Git Diff, Working Tree, Untracked Files, .env)     │
+└───────────────────────────┬────────────────────────────┘
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│                   GitGuard Core Engine                 │
+│                                                        │
+│  [Dual Context Separation]                             │
+│  ├── RawRepositoryContext                              │
+│  │   └── Local Deterministic Secret Scanner            │
+│  │       (Unredacted diff, flags hardcoded secrets)   │
+│  │                                                     │
+│  └── SemanticEvaluationContext                         │
+│      └── Context Privacy Sanitizer                     │
+│          (Redacts API keys, passwords, tokens, env)    │
+└──────────────┬──────────────────────────┬──────────────┘
+               │                          │
+               ▼                          ▼
+┌────────────────────────┐      ┌────────────────────────┐
+│  Local Subprocesses    │      │  External AI Provider  │
+│  (npm test, tsc, etc.) │      │  (TypeSafe Jev API)    │
+│  * Strictly controlled │      │  * Sanitized payload   │
+│  * Repo-local only     │      │  * TLS HTTPS only      │
+└────────────────────────┘      └────────────────────────┘
+```
+
+### Key Security Assurances
+
+1. **Dual Context Architecture**:
+   - **Local Scanning**: The built-in deterministic secret scanner analyzes unredacted diffs to detect committed or staged secrets (such as `.env`, AWS tokens, SSH private keys, GitHub PATs).
+   - **Remote AI Calls**: Context passed to external semantic providers (e.g. TypeSafe System One) is strictly sanitized. Secret keys, high-entropy tokens, password patterns, and configured sensitive files (`.env*`, `*.pem`, `*.key`) are redacted before any outbound payload is serialized.
+
+2. **Read-Only by Design**:
+   - GitGuard's core engine, git adapter, and MCP server are strictly **read-only** with respect to the user's codebase. GitGuard never runs `git commit`, `git checkout`, `git reset`, `git push`, or modifying file writes in the user's source tree.
+   - All state persistence (Findings, evaluation cache) is confined to `.git/gitguard/`.
+
+3. **Subprocess Isolation**:
+   - Deterministic commands (tests, linters, typecheckers) configured in `.gitguard.yml` or default presets run within the local repository working directory with timeouts to prevent hanging or unbounded execution.
+   - Arbitrary shell commands are not exposed over untrusted interfaces.
+
+4. **Prompt Injection & Adversarial Diff Mitigation**:
+   - Code diffs and commit messages could contain adversarial text attempting to trick AI evaluators. GitGuard structures evaluation questions with strict schemas (`noul`, `choice`, `score`) and typed criteria, rather than free-form unconstrained prompts, minimizing prompt injection attack surface.
+
+---
+
+## 2. Supported Versions
+
+Security updates are applied to the active release stream:
+
+| Version | Supported          |
+| ------- | ------------------ |
+| 0.2.x   | :white_check_mark: |
+| < 0.2.0 | :x:                |
+
+---
+
+## 3. Reporting a Vulnerability
+
+If you discover a security vulnerability or security-sensitive defect in GitGuard:
+
+1. **Do NOT file a public GitHub issue.**
+2. Send a detailed vulnerability report privately to the maintainers via GitHub Security Advisories or by contacting the repository maintainer directly.
+3. Include:
+   - Description of the vulnerability.
+   - Steps to reproduce or proof-of-concept diff.
+   - Potential impact.
+   - Any suggested mitigations.
+
+We will acknowledge receipt within 48 hours and work with you to analyze, patch, and coordinate responsible disclosure.
