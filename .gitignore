@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build Output
+dist/
+*.tsbuildinfo
+
+# Test & Coverage
+coverage/
+.vitest/
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+# Agent & Local Tools
+.agents/
+.codegraph/
+ORIGINAL_REQUEST.md

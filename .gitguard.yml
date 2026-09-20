@@ -1,0 +1,182 @@
+# ==============================================================================
+# GitGuard Repository Configuration (.gitguard.yml)
+# Repository-Aware Change Verification & Quality Gate Specification
+# ==============================================================================
+version: 1
+
+# ------------------------------------------------------------------------------
+# 1. Context Extraction Budgets & File Filtering
+# ------------------------------------------------------------------------------
+context:
+  # Maximum characters allocated for raw unified diffs before intelligent truncation.
+  # Protects against token budget overflow while retaining critical hunk headers.
+  max_diff_chars: 50000
+
+  # Maximum total characters allowed across the entire synthesized EvaluationContext
+  # (including diffs, surrounding lines, repo instructions, and discovered tests).
+  max_total_chars: 100000
+
+  # Number of surrounding source lines extracted above and below each diff hunk.
+  # Provides structural AST context (e.g. enclosing function/class definitions).
+  surrounding_lines: 40
+
+  # Automated test discovery parameters for changed files.
+  related_tests:
+    # Maximum number of related test files discovered and attached to context.
+    max_files: 5
+
+  # Repository instructions limits (e.g., AGENTS.md, CLAUDE.md, CONTRIBUTING.md).
+  instructions:
+    max_chars: 15000
+
+# ------------------------------------------------------------------------------
+# 2. System One Semantic Decision Provider Settings
+# ------------------------------------------------------------------------------
+system_one:
+  # Provider implementation: 'typesafe' (live API) or 'mock' (deterministic offline simulation).
+  # If TYPESAFE_API_KEY is not set or network fails, GitGuard falls back gracefully to mock.
+  provider: typesafe
+
+  # Underlying System One model identifier.
+  model: jev
+
+  # Network timeout in milliseconds for semantic decision evaluation.
+  timeout_ms: 10000
+
+# ------------------------------------------------------------------------------
+# 3. Deterministic Status Checkers
+# ------------------------------------------------------------------------------
+deterministic:
+  # Automated unit and integration test suite execution.
+  test:
+    enabled: true
+    run: "pnpm test"
+    block_on_failure: true
+    timeout_ms: 60000
+
+  # Static code analysis and style checks.
+  lint:
+    enabled: true
+    run: "pnpm lint"
+    block_on_failure: true
+    timeout_ms: 30000
+
+  # Static type verification.
+  typecheck:
+    enabled: true
+    run: "pnpm tsc --noEmit"
+    block_on_failure: true
+    timeout_ms: 45000
+
+  # Secret scanner checking added lines in diffs for leaked API keys, tokens, and credentials.
+  secret_scan:
+    enabled: true
+    # Hard blocker: commits or diffs containing unredacted credentials are immediately BLOCKED.
+    block_on_detection: true
+
+# ------------------------------------------------------------------------------
+# 4. Standard Built-in Semantic Rules & Thresholds
+# ------------------------------------------------------------------------------
+rules:
+  # Evaluates whether the changeset genuinely satisfies the declared task intent.
+  # Note: Uses INVERTED thresholds (higher probability = higher confidence of completion).
+  task_completed:
+    enabled: true
+    # Triggers REVIEW if completion probability falls below 60%.
+    review_below: 0.60
+    # Triggers BLOCK if completion probability falls below 20% (task unattempted or completely off-target).
+    block_below: 0.20
+
+  # Detects scope creep, formatting churn, or modifications unrelated to the stated task.
+  unrelated_changes:
+    enabled: true
+    warn: 0.55
+    review: 0.75
+    block: 0.95
+
+  # Evaluates whether functional or behavioral code changes lack corresponding automated tests.
+  tests_required:
+    enabled: true
+    warn: 0.60
+    review: 0.80
+
+  # Identifies modifications affecting authentication, cryptography, permissions, or security boundaries.
+  security_sensitive:
+    enabled: true
+    warn: 0.50
+    review: 0.65
+    block: 0.90
+
+  # Evaluates the blast radius and regression risk of the changeset.
+  # Categorical mapping: low, medium, high, critical.
+  regression_risk:
+    enabled: true
+    warn_on:
+      - medium
+    review_on:
+      - high
+    block_on:
+      - critical
+
+# ------------------------------------------------------------------------------
+# 5. Custom Repository Semantic Rules
+# ------------------------------------------------------------------------------
+custom_rules:
+  # Rule: Enforce automated tests whenever authentication or authorization code is altered.
+  - id: auth_requires_tests
+    description: "Ensure authentication and authorization modifications include dedicated test coverage"
+    files:
+      - "src/auth/**"
+      - "src/security/**"
+    exclude:
+      - "**/*.test.ts"
+      - "**/*.spec.ts"
+    question: "Does this change modify authentication, authorization, token validation, or security boundary logic without corresponding automated tests?"
+    primitive: noul
+    review: 0.70
+    block: 0.95
+
+  # Rule: Flag alterations to billing, invoicing, or payment processing logic.
+  - id: payment_behavior_change
+    description: "Detect alterations to billing, settlement, fee structures, or transaction processing"
+    files:
+      - "src/payment/**"
+      - "src/billing/**"
+    question: "Does this change alter billing calculation, transaction settlement, payment gateway interaction, or refund behavior?"
+    primitive: noul
+    review: 0.60
+    block: 0.90
+
+# ------------------------------------------------------------------------------
+# 6. Privacy & Data Redaction Configuration
+# ------------------------------------------------------------------------------
+privacy:
+  # Automatically replace detected API keys, credentials, and tokens with ***[REDACTED]***
+  # before sending context to semantic evaluation models or emitting terminal findings.
+  redact_secrets: true
+
+  # Avoid bundling entire raw file contents into semantic payloads; retain only diff hunks and context spans.
+  include_full_files: false
+
+  # Explicit file glob patterns excluded from diff parsing, context generation, and model submission.
+  exclude_paths:
+    - ".env*"
+    - "*.pem"
+    - "*.key"
+    - "credentials.json"
+    - "secrets.*"
+    - "id_rsa*"
+
+# ------------------------------------------------------------------------------
+# 7. Gate Verdict & Verification Cache Policy
+# ------------------------------------------------------------------------------
+gate:
+  # Verdict levels that result in a non-zero process exit code (blocking git commit or CI build).
+  # Supported values: PASS, WARN, REVIEW, BLOCK.
+  block_on:
+    - BLOCK
+
+  # Evaluation caching based on git tree/diff SHA-256 digests to accelerate pre-commit and CI runs.
+  cache:
+    enabled: true
+    directory: ".git/gitguard/cache"
