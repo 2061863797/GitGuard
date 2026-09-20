@@ -3,12 +3,26 @@
 [![Node Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-blue.svg)](https://www.typescriptlang.org/)
 [![Tests](https://img.shields.io/badge/tests-678%20passed-success.svg)](https://vitest.dev/)
+[![Semantic Engine](https://img.shields.io/badge/Semantic%20Engine-TypeSafe%20%2F%20Jev-FF6B6B.svg)](https://typesafe.ai/)
 [![Protocol](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-> **Repository-aware quality gate for developers and autonomous coding agents.**
+> **Repository-aware change verification and quality gate powered by TypeSafe / Jev System One semantic intelligence & deterministic checks.**
 
-GitGuard verifies code changes **before** they are committed, merged, or accepted into a software repository. It combines deterministic checks, repository context extraction, System One semantic evaluations, and a configurable policy engine into a unified verification infrastructure.
+GitGuard verifies code changes **before** they are committed, merged, or accepted into a software repository. Combining deterministic toolchains with **TypeSafe / Jev System One** semantic decision models, repository context extraction, and a configurable policy engine, GitGuard acts as an autonomous, high-precision verification infrastructure for both human developers and AI coding agents.
+
+### 🌟 Powered by TypeSafe / Jev (System One AI)
+
+At the core of GitGuard's semantic gate is **[TypeSafe](https://typesafe.ai/) and its System One foundation model, Jev**. 
+
+Unlike conversational LLMs that produce verbose, unstructured code review opinions prone to hallucinations, **TypeSafe / Jev** turns complex code diffs, task intents, and repository contexts into **typed, calibrated judgments and mathematical probabilities**:
+
+- 🎯 **Task Fulfillment (`task_completed`)**: Calibrates whether the diff genuinely accomplishes the declared goal or merely wrote superficial, hallucinated code.
+- 🛡️ **Scope Creep & Boundary Drift (`unrelated_changes`)**: Mathematically detects modifications that deviate from the user's intent or touch files outside the task scope.
+- 🧪 **Test Adequacy Guarantee (`tests_required`)**: Programmatically assesses whether new logic or edge paths demand corresponding unit or integration tests.
+- 🔒 **Security Sensitivity Assessment (`security_sensitive`)**: Evaluates whether auth flows, cryptographic primitives, or credential paths have been altered.
+- ⚠️ **Regression Risk Forecasting (`regression_risk`)**: Quantifies blast radius and categorizes regression likelihood into discrete risk levels (`low`, `medium`, `high`, `critical`).
+- ⚡ **Zero-Dependency Offline Fallback**: Features an embedded deterministic heuristic mock provider, ensuring continuous local & CI enforcement without external API keys.
 
 ---
 
