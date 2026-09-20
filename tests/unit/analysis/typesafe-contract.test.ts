@@ -214,6 +214,98 @@ describe('TypeSafe System One Official API Contract', () => {
     expect(report.metadata.fallbackReason).toContain('500');
     expect(report.decisions[0].provider).toBe('mock');
   });
+
+  it('retries on network transient error (fetch exception) and succeeds on retry', async () => {
+    let callCount = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error('fetch failed: ECONNRESET');
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          model: 'jev-latest',
+          answers: {
+            task_completed: {
+              type: 'noul',
+              noul: 0.9,
+              confidence: 0.95,
+              rationale: 'Recovered from transient network glitch',
+            },
+          },
+        }),
+      };
+    });
+
+    const provider = new TypeSafeSystemOneProvider({
+      apiKey: 'test-key',
+      retryBackoffMs: 10,
+      maxRetries: 2,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    const decisions = await provider.evaluate(createDummyContext(), [
+      STANDARD_QUESTIONS_MAP.task_completed,
+    ]);
+
+    expect(callCount).toBe(2);
+    expect(decisions[0].probability).toBe(0.9);
+  });
+
+  it('parses and respects Retry-After header on HTTP 429', async () => {
+    let callCount = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: false,
+          status: 429,
+          statusText: 'Too Many Requests',
+          headers: {
+            get: (h: string) => (h.toLowerCase() === 'retry-after' ? '0.05' : null),
+          },
+          text: async () => 'Rate limit exceeded',
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          model: 'jev-latest',
+          answers: {
+            task_completed: {
+              type: 'noul',
+              noul: 0.98,
+              confidence: 0.99,
+              rationale: 'Succeeded after Retry-After delay',
+            },
+          },
+        }),
+      };
+    });
+
+    const provider = new TypeSafeSystemOneProvider({
+      apiKey: 'test-key',
+      retryBackoffMs: 1000, // configured backoff is 1s, but Retry-After says 0.05s (50ms)
+      maxRetries: 2,
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    const startTime = Date.now();
+    const decisions = await provider.evaluate(createDummyContext(), [
+      STANDARD_QUESTIONS_MAP.task_completed,
+    ]);
+    const elapsed = Date.now() - startTime;
+
+    expect(callCount).toBe(2);
+    expect(decisions[0].probability).toBe(0.98);
+    // Should respect Retry-After (~50ms) instead of waiting for 1000ms
+    expect(elapsed).toBeLessThan(800);
+  });
 });
 
 describe('Dual Context Separation & Secret Handling', () => {

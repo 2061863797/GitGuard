@@ -471,6 +471,7 @@ describe('Semantic Analysis Layer', () => {
         apiKey: 'ts_key',
         fetchFn: failingFetch as unknown as typeof fetch,
         strict: false,
+        maxRetries: 0,
       });
 
       const context = createBaseContext();

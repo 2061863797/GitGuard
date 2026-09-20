@@ -340,7 +340,14 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
         // Handle rate limiting (429) and overload (529) with exponential backoff
         if (response.status === 429 || response.status === 529) {
           if (attempt < this.maxRetries) {
-            const backoff = this.retryBackoffMs * Math.pow(2, attempt);
+            let backoff = this.retryBackoffMs * Math.pow(2, attempt);
+            const retryAfterHeader = response.headers?.get?.('retry-after');
+            if (retryAfterHeader) {
+              const seconds = parseFloat(retryAfterHeader);
+              if (!isNaN(seconds) && seconds > 0) {
+                backoff = Math.min(seconds * 1000, 30000);
+              }
+            }
             attempt++;
             await sleep(backoff);
             continue;
@@ -349,9 +356,15 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => '');
-          throw new Error(
-            `HTTP ${response.status} ${response.statusText}${errorText ? `: ${errorText}` : ''}`
-          );
+          const errorMsg = `HTTP ${response.status} ${response.statusText}${errorText ? `: ${errorText}` : ''}`;
+          // 5xx server errors (500, 502, 503, 504) are transient and retryable
+          if (response.status >= 500 && attempt < this.maxRetries) {
+            const backoff = this.retryBackoffMs * Math.pow(2, attempt);
+            attempt++;
+            await sleep(backoff);
+            continue;
+          }
+          throw new Error(errorMsg);
         }
 
         const data = (await response.json()) as {
@@ -436,6 +449,14 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
         throw new Error('Malformed System One response: missing answers map');
       } catch (err: unknown) {
         lastError = err instanceof Error ? err : new Error(String(err));
+        // Retry transient network errors (timeouts, aborts, connection reset), skip deterministic 4xx client errors
+        const isNonRetryableClientError = /HTTP 4\d\d/.test(lastError.message);
+        if (!isNonRetryableClientError && attempt < this.maxRetries) {
+          const backoff = this.retryBackoffMs * Math.pow(2, attempt);
+          attempt++;
+          await sleep(backoff);
+          continue;
+        }
         break;
       } finally {
         clearTimeout(timeoutTimer);

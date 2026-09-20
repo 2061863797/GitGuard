@@ -13,6 +13,7 @@ import {
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { GitGuardEngine } from '../../types/engine.js';
 import { DefaultGitGuardEngine } from '../../core/engine.js';
+import { GITGUARD_VERSION } from '../../index.js';
 import { GITGUARD_MCP_TOOLS, executeMcpTool } from './tools.js';
 
 /**
@@ -52,7 +53,7 @@ export class GitGuardMcpServer {
     this.server = new Server(
       {
         name: options?.name ?? 'gitguard',
-        version: options?.version ?? '0.1.0',
+        version: options?.version ?? GITGUARD_VERSION,
       },
       {
         capabilities: {
