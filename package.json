@@ -29,6 +29,7 @@
     "clean": "rimraf dist",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "pretest": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
