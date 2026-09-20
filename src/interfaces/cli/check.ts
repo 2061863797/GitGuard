@@ -79,11 +79,15 @@ export async function checkCommand(
       : formatCheckText(result);
 
     if (!options.silent) {
-      // Print explicit warning if semantic fallback occurred
+      // Print explicit warning or error if semantic fallback occurred
       const decisionsList = Object.values(result.semanticDecisions || {});
       const hasFallback = decisionsList.some((d) => d.metadata?.fallback === true);
       if (hasFallback && !isJson) {
-        console.warn('\n⚠️  WARNING: TypeSafe Jev unavailable. Evaluated using offline fallback provider.');
+        if (options.requireSemantic) {
+          console.error('\n❌  ERROR: --require-semantic specified, but TypeSafe Jev was unavailable.');
+        } else {
+          console.warn('\n⚠️  WARNING: TypeSafe Jev unavailable. Evaluated using offline fallback provider.');
+        }
       }
       console.log(output);
     }

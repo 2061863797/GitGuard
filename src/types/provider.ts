@@ -206,6 +206,10 @@ export interface SemanticDecision {
   value?: string;
   /** Normalized score value (0.0 to 1.0) for score questions */
   score?: number;
+  /** Raw unnormalized score returned directly by provider */
+  rawScore?: number;
+  /** Categorical level probabilities if returned for score questions */
+  probabilities?: Record<string, number>;
   /** Decision confidence metric (0.0 to 1.0) */
   confidence?: number;
   /** Name of provider producing this decision ('typesafe' | 'mock' | 'heuristic') */

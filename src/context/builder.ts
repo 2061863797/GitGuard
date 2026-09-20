@@ -119,23 +119,14 @@ export class DefaultContextBuilder implements ContextBuilder {
       scope,
     };
     const rawDiff = await this.git.getDiff(scope, diffOptions);
-    let diffContext: DiffContext = parseDiff(rawDiff);
-
-    // Apply budget constraint to diff
-    if (diffContext.raw.length > budget.maxDiffChars) {
-      diffContext = {
-        ...diffContext,
-        raw: diffContext.raw.substring(0, budget.maxDiffChars) + '\n[Diff truncated due to budget limit]',
-        truncated: true,
-      };
-    }
+    const fullDiffContext: DiffContext = parseDiff(rawDiff);
 
     // 3. Task Context
     const taskContext = this.parseTaskContext(options.task);
 
     // 4. Surrounding lines code context
     const fileContexts = await this.extractSurroundingCode(
-      diffContext,
+      fullDiffContext,
       repoMetadata.rootPath,
       budget.surroundingLines,
       options
@@ -144,22 +135,22 @@ export class DefaultContextBuilder implements ContextBuilder {
     // 5. Instruction files discovery
     const instructionContexts = await this.discoverInstructions(
       repoMetadata.rootPath,
-      diffContext,
+      fullDiffContext,
       budget.maxInstructionChars,
       options.policyConfigPath
     );
 
     // 6. Related tests discovery
     const testContexts = await this.discoverRelatedTests(
-      diffContext,
+      fullDiffContext,
       repoMetadata.rootPath,
       budget.maxRelatedTestFiles
     );
 
-    // Assemble initial context
-    let rawContext: EvaluationContext = {
+    // Assemble rawContext: complete, untruncated diff for local deterministic tools (secret scanner, test runner)
+    const rawContext: EvaluationContext = {
       task: taskContext,
-      diff: diffContext,
+      diff: fullDiffContext,
       files: fileContexts,
       instructions: instructionContexts,
       relatedTests: testContexts,
@@ -168,11 +159,25 @@ export class DefaultContextBuilder implements ContextBuilder {
       createdAt: new Date().toISOString(),
     };
 
+    // Apply budget constraint and sanitization specifically to semanticContext for external AI models
+    let semanticDiffContext: DiffContext = fullDiffContext;
+    if (semanticDiffContext.raw.length > budget.maxDiffChars) {
+      semanticDiffContext = {
+        ...semanticDiffContext,
+        raw: semanticDiffContext.raw.substring(0, budget.maxDiffChars) + '\n[Diff truncated due to budget limit]',
+        truncated: true,
+      };
+    }
+
+    let semanticContext: EvaluationContext = {
+      ...JSON.parse(JSON.stringify(rawContext)),
+      diff: semanticDiffContext,
+    };
+
     // 7. Context budget management: ensure total context conforms to maxTotalChars
-    rawContext = this.enforceTotalBudget(rawContext, budget.maxTotalChars);
+    semanticContext = this.enforceTotalBudget(semanticContext, budget.maxTotalChars);
 
     // 8. Privacy & secret redaction for semantic context
-    let semanticContext: EvaluationContext = JSON.parse(JSON.stringify(rawContext));
     if (options.privacy?.redactSecrets !== false) {
       semanticContext = sanitizeEvaluationContext(semanticContext, options.privacy);
     }

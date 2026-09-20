@@ -696,6 +696,58 @@ describe('Policy Engine & Rule Evaluators', () => {
       it('evaluateScoreThreshold returns triggered false on invalid input type', () => {
         expect(evaluateScoreThreshold(null as any, {})).toEqual({ triggered: false });
       });
+
+      it('evaluateScoreThreshold maps 1.05 to low instead of critical block', () => {
+        const thresholds = {
+          warn_on: ['medium'],
+          review_on: ['high'],
+          block_on: ['critical'],
+        };
+        // 1.05 on a 0..4 score scale should normalize to low and not trigger block
+        const res = evaluateScoreThreshold(1.05, thresholds);
+        expect(res.triggered).toBe(false);
+      });
+      it('passes tests_required when test files are present in the changeset', () => {
+        const contextWithTests: EvaluationContext = {
+          ...mockContext,
+          diff: {
+            scope: 'staged',
+            raw: 'diff --git a/tests/auth.test.ts b/tests/auth.test.ts',
+            files: [
+              {
+                path: 'src/auth.ts',
+                newPath: 'src/auth.ts',
+                status: 'modified',
+                additions: 50,
+                deletions: 0,
+                hunks: [],
+              },
+              {
+                path: 'tests/auth.test.ts',
+                newPath: 'tests/auth.test.ts',
+                status: 'added',
+                additions: 30,
+                deletions: 0,
+                hunks: [],
+              },
+            ],
+            summary: { filesChanged: 2, insertions: 80, deletions: 0 },
+          },
+        };
+
+        const decisions: SemanticDecision[] = [
+          {
+            id: 'tests_required',
+            probability: 0.85, // Above review threshold (0.80)
+            provider: 'mock',
+          },
+        ];
+
+        const result = engine.evaluate([], decisions, mockPolicy, contextWithTests);
+        // Even though tests_required probability is 0.85, test files exist, so it should PASS
+        expect(result.passedRules).toContain('tests_required');
+        expect(result.violatedRules).not.toContain('tests_required');
+      });
     });
   });
 });

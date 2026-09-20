@@ -309,12 +309,15 @@ export function evaluateScoreThreshold(
     const numericResult = evaluateNumericalThreshold(valueOrScore, thresholds);
     if (numericResult.triggered) return numericResult;
 
-    // Map numeric score to conventional levels if categorical lists exist
+    // Normalize raw score expectations (e.g. 0..4 index score where 1.05 represents low)
+    const norm = valueOrScore > 1.0 ? Math.min(1.0, valueOrScore / 4.0) : valueOrScore;
+
+    // Map normalized numeric score to conventional levels if categorical lists exist
     let level = 'low';
-    if (valueOrScore >= 0.9) level = 'critical';
-    else if (valueOrScore >= 0.7) level = 'high';
-    else if (valueOrScore >= 0.4) level = 'medium';
-    else if (valueOrScore >= 0.2) level = 'low';
+    if (norm >= 0.9) level = 'critical';
+    else if (norm >= 0.7) level = 'high';
+    else if (norm >= 0.4) level = 'medium';
+    else if (norm >= 0.2) level = 'low';
     else level = 'negligible';
 
     return evaluateScoreThreshold(level, thresholds);

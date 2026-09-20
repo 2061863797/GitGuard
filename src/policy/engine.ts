@@ -64,6 +64,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
     const passedRulesSet = new Set<string>();
     const violatedRulesSet = new Set<string>();
 
+    const hasTask = Boolean(context.task?.task && context.task.task.trim().length > 0);
     const changedFiles = (context.diff?.files || []).map((f) => f.newPath || f.oldPath || '');
     const hasDeterministicFailures = (deterministicResults || []).some((r) => r.status === 'failed');
     const isDiffEmpty =
@@ -115,9 +116,26 @@ export class DefaultPolicyEngine implements PolicyEngine {
 
       // Check task requirement constraint for task_completed
       if (ruleId === 'task_completed') {
-        const hasTask = context.task && context.task.task && context.task.task.trim().length > 0;
         if (!hasTask) {
           // Without task description, task_completed rule is treated as clean / satisfied
+          passedRulesSet.add(ruleId);
+          continue;
+        }
+      }
+
+      // Check tests_required composite logic: if tests are present in changeset, rule passes
+      if (ruleId === 'tests_required') {
+        const testsPresentDecision = decisionMap.get('tests_present');
+        const hasTestFilesInDiff = (context.diff?.files || []).some(
+          (f) =>
+            (f.newPath && (f.newPath.includes('.test.') || f.newPath.includes('.spec.') || f.newPath.startsWith('tests/') || f.newPath.startsWith('__tests__/'))) ||
+            (f.oldPath && (f.oldPath.includes('.test.') || f.oldPath.includes('.spec.') || f.oldPath.startsWith('tests/') || f.oldPath.startsWith('__tests__/')))
+        );
+        const testsArePresent =
+          (testsPresentDecision && (testsPresentDecision.probability ?? 0) >= 0.6) ||
+          hasTestFilesInDiff;
+
+        if (testsArePresent) {
           passedRulesSet.add(ruleId);
           continue;
         }

@@ -17,7 +17,7 @@ context:
   max_total_chars: 100000
 
   # Number of surrounding source lines extracted above and below each diff hunk.
-  # Provides structural AST context (e.g. enclosing function/class definitions).
+  # Provides hunk-adjacent source context (surrounding lines around modified hunks).
   surrounding_lines: 40
 
   # Automated test discovery parameters for changed files.
@@ -37,8 +37,8 @@ system_one:
   # If TYPESAFE_API_KEY is not set or network fails, GitGuard falls back gracefully to mock.
   provider: typesafe
 
-  # Underlying System One model identifier.
-  model: jev
+  # Underlying System One model identifier. Official recommended alias: jev-latest.
+  model: jev-latest
 
   # Network timeout in milliseconds for semantic decision evaluation.
   timeout_ms: 10000

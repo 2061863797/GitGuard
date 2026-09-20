@@ -28,7 +28,7 @@ export const DEFAULT_POLICY_CONFIG: PolicyConfig = {
   },
   system_one: {
     provider: 'typesafe',
-    model: 'jev',
+    model: 'jev-latest',
     timeout_ms: 10000,
   },
   deterministic: {

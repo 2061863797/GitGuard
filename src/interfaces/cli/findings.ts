@@ -41,8 +41,8 @@ export async function findingsCommand(
     };
 
     let findings = engine.getFindings ? await engine.getFindings(filter) : [];
-    if (findings.length === 0 && options.cwd) {
-      const store = new FileFindingStore(options.cwd);
+    if (findings.length === 0) {
+      const store = new FileFindingStore(options.cwd ?? process.cwd());
       findings = await store.list(filter);
     }
 

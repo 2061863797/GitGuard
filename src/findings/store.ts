@@ -6,8 +6,26 @@
  */
 
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as path from 'node:path';
 import type { Finding, FindingFilter } from '../types/finding.js';
+
+/**
+ * Finds nearest ancestor directory containing a .git folder.
+ */
+function findNearestGitRoot(startDir: string): string {
+  let current = path.resolve(startDir);
+  while (true) {
+    if (fsSync.existsSync(path.join(current, '.git'))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return path.resolve(startDir);
+    }
+    current = parent;
+  }
+}
 
 /**
  * Finding persistence interface.
@@ -96,7 +114,8 @@ export class FileFindingStore implements FindingStore {
   private memoryFallback: MemoryFindingStore;
 
   constructor(repoRoot: string = process.cwd()) {
-    this.storePath = path.join(repoRoot, '.git', 'gitguard', 'findings.json');
+    const resolvedRoot = findNearestGitRoot(repoRoot);
+    this.storePath = path.join(resolvedRoot, '.git', 'gitguard', 'findings.json');
     this.memoryFallback = new MemoryFindingStore();
   }
 
@@ -127,7 +146,15 @@ export class FileFindingStore implements FindingStore {
       const dir = path.dirname(this.storePath);
       await fs.mkdir(dir, { recursive: true });
       const serialized = JSON.stringify(Array.from(map.values()), null, 2);
-      await fs.writeFile(this.storePath, serialized, 'utf8');
+      const tmpPath = `${this.storePath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+      await fs.writeFile(tmpPath, serialized, 'utf8');
+      try {
+        await fs.rename(tmpPath, this.storePath);
+      } catch {
+        // Fallback for filesystem locking or cross-device rename
+        await fs.writeFile(this.storePath, serialized, 'utf8');
+        await fs.unlink(tmpPath).catch(() => {});
+      }
     } catch {
       // If .git is unwritable (e.g. read-only env or unborn sandbox), keep in memory fallback
       for (const f of map.values()) {

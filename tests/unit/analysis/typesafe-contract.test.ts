@@ -397,4 +397,139 @@ describe('FileFindingStore Repository-level Persistence', () => {
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
   });
+
+  it('resolves git root from a subdirectory and writes atomically with tmp+rename', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gitguard-store-sub-'));
+    try {
+      const gitDir = path.join(tmpDir, '.git');
+      const subDir = path.join(tmpDir, 'src', 'components');
+      await fs.mkdir(gitDir, { recursive: true });
+      await fs.mkdir(subDir, { recursive: true });
+
+      // Instantiate FileFindingStore inside subdirectory
+      const store = new FileFindingStore(subDir);
+      const testFinding = {
+        id: 'F-SUB-001',
+        ruleId: 'deterministic.test',
+        source: 'deterministic' as const,
+        status: 'block' as const,
+        severity: 'CRITICAL' as const,
+        lifecycle: 'active' as const,
+        affectedFiles: ['src/components/Button.tsx'],
+        message: 'Failing component test',
+        evidence: [],
+        expectedEvidence: [],
+        fingerprint: 'fp_sub_001',
+        createdAt: new Date().toISOString(),
+      };
+
+      await store.save([testFinding]);
+
+      // Verify file is written inside repoRoot/.git/gitguard/findings.json
+      const expectedPath = path.join(gitDir, 'gitguard', 'findings.json');
+      const content = await fs.readFile(expectedPath, 'utf8');
+      expect(content).toContain('F-SUB-001');
+
+      const loaded = await store.list();
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].id).toBe('F-SUB-001');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+describe('v0.2.1 Core Correctness Hotfixes Regression Suite', () => {
+  it('falls back to TYPESAFE_API_KEY when options omits apiKey', async () => {
+    const oldEnv = process.env.TYPESAFE_API_KEY;
+    try {
+      process.env.TYPESAFE_API_KEY = 'env-typesafe-key-999';
+      const provider = new TypeSafeSystemOneProvider({});
+      expect(await provider.isAvailable()).toBe(true);
+    } finally {
+      if (oldEnv === undefined) {
+        delete process.env.TYPESAFE_API_KEY;
+      } else {
+        process.env.TYPESAFE_API_KEY = oldEnv;
+      }
+    }
+  });
+
+  it('maps rawScore 1.05 to normalized score and categorical low without false critical block', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        model: 'jev-latest',
+        answers: {
+          regression_risk: {
+            type: 'score',
+            score: 1.05,
+            confidence: 0.95,
+            rationale: 'Low blast radius with localized modifications.',
+          },
+        },
+      }),
+    });
+
+    const provider = new TypeSafeSystemOneProvider({
+      apiKey: 'test-key',
+      fetchFn: mockFetch as unknown as typeof fetch,
+    });
+
+    const context = createDummyContext();
+    const decisions = await provider.evaluate(context, [STANDARD_QUESTIONS_MAP.regression_risk]);
+
+    expect(decisions).toHaveLength(1);
+    const d = decisions[0];
+    expect(d.rawScore).toBe(1.05);
+    // Normalized score in 0..1 scale (1.05 / 4 = 0.2625)
+    expect(d.score).toBeCloseTo(0.2625, 4);
+    // Nearest categorical level mapped to 'low'
+    expect(d.value).toBe('low');
+  });
+
+  it('preserves complete unbudgeted diff in rawContext for secret scanning (>50KB)', async () => {
+    // Generate a 60KB diff where the secret is inserted past 55KB
+    const padding = '+line_content_padding_string_to_fill_token_budget_up_to_limit\n'.repeat(900);
+    const secretLine = '+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n';
+    const largeDiff = `diff --git a/src/app.ts b/src/app.ts\n${padding}${secretLine}`;
+
+    expect(largeDiff.length).toBeGreaterThan(55000);
+
+    const mockGit: Partial<GitAdapter> = {
+      getRepositoryRoot: vi.fn().mockResolvedValue('/fake/repo'),
+      getHeadCommit: vi.fn().mockResolvedValue({
+        hash: '1234567890abcdef',
+        shortHash: '1234567',
+        author: 'Dev',
+        date: new Date().toISOString(),
+        message: 'commit',
+      }),
+      getStatus: vi.fn().mockResolvedValue({
+        branch: 'main',
+        headSha: '1234567890abcdef',
+        isClean: false,
+        stagedFiles: ['src/app.ts'],
+        unstagedFiles: [],
+        untrackedFiles: [],
+      } satisfies GitStatusResult),
+      getDiff: vi.fn().mockResolvedValue(largeDiff),
+      readFileAtRef: vi.fn().mockResolvedValue(''),
+      getFileContent: vi.fn().mockResolvedValue(''),
+    };
+
+    const builder = new DefaultContextBuilder(mockGit as GitAdapter);
+    const { rawContext, semanticContext } = await builder.buildDualContext({
+      scope: 'staged',
+      budget: { maxDiffChars: 50000 },
+    });
+
+    // rawContext.diff is completely untruncated for local scanners
+    expect(rawContext.diff.raw).toContain('AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY');
+
+    // semanticContext.diff is truncated for external AI model context limits
+    expect(semanticContext.diff.truncated).toBe(true);
+    expect(semanticContext.diff.raw).toContain('[Diff truncated due to budget limit]');
+  });
 });

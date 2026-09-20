@@ -331,7 +331,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'GitGuard/0.2.0',
+            'User-Agent': 'GitGuard/0.2.1',
           },
           body: JSON.stringify(payload),
           signal: controller.signal,
@@ -399,8 +399,20 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
             }
 
             const prob = ans.noul ?? ans.probability;
-            const val = ans.choice ?? ans.value;
-            const score = ans.score;
+            let val = ans.choice ?? ans.value;
+            let score = ans.score;
+            const rawScore = ans.score;
+            const probabilities = ans.probabilities;
+
+            if (q.type === 'score' && typeof rawScore === 'number' && q.levels && q.levels.length > 1) {
+              const maxIdx = q.levels.length - 1;
+              score = Math.max(0, Math.min(1, rawScore / maxIdx));
+              if (!val) {
+                const roundedIdx = Math.max(0, Math.min(maxIdx, Math.round(rawScore)));
+                val = q.levels[roundedIdx]?.name;
+              }
+            }
+
             const conf = ans.confidence ?? 0.9;
 
             return {
@@ -408,6 +420,8 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
               probability: prob,
               value: val,
               score,
+              rawScore,
+              probabilities,
               confidence: conf,
               provider: this.name,
               rationale: ans.rationale,
@@ -433,11 +447,23 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
                 rationale: 'Question omitted in provider response; defaulted',
               };
             }
+            let val = item.value;
+            let score = item.score;
+            const rawScore = item.score;
+            if (q.type === 'score' && typeof rawScore === 'number' && q.levels && q.levels.length > 1) {
+              const maxIdx = q.levels.length - 1;
+              score = Math.max(0, Math.min(1, rawScore / maxIdx));
+              if (!val) {
+                const roundedIdx = Math.max(0, Math.min(maxIdx, Math.round(rawScore)));
+                val = q.levels[roundedIdx]?.name;
+              }
+            }
             return {
               id: item.id,
               probability: item.probability,
-              value: item.value,
-              score: item.score,
+              value: val,
+              score,
+              rawScore,
               confidence: item.confidence ?? 0.9,
               provider: this.name,
               rationale: item.rationale,

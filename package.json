@@ -1,6 +1,6 @@
 {
   "name": "gitguard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Repository-aware change verification and quality gate system in TypeScript",
   "type": "module",
   "main": "./dist/index.js",

@@ -218,7 +218,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
           ? options.task
           : options.task?.task;
 
-      const context = await this.contextBuilder.buildContext({
+      const buildOptions = {
         scope,
         diffOptions: diffOpts,
         cwd,
@@ -228,7 +228,15 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
           maxTotalChars: config.context?.max_total_chars,
           surroundingLines: config.context?.surrounding_lines,
         },
-      });
+        policyConfigPath: options.configPath,
+      };
+
+      const { rawContext, semanticContext } = this.contextBuilder.buildDualContext
+        ? await this.contextBuilder.buildDualContext(buildOptions)
+        : {
+            rawContext: await this.contextBuilder.buildContext(buildOptions),
+            semanticContext: await this.contextBuilder.buildContext(buildOptions),
+          };
 
       const isClean =
         changedFiles.length === 0 && (!parsedDiff.raw || parsedDiff.raw.trim().length === 0);
@@ -245,12 +253,12 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
             },
           ]
         : await this.deterministicRunner.run(
-            context,
+            rawContext,
             toDeterministicRunnerConfig(config.deterministic)
           );
 
       hasDeterministicFailures = detResults.some((r) => r.status === 'failed');
-      const evalResult = this.policyEngine.evaluate(detResults, [], config, context);
+      const evalResult = this.policyEngine.evaluate(detResults, [], config, semanticContext);
       status = evalResult.verdict;
       findings = evalResult.findings;
     }
@@ -381,12 +389,14 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     if (isOffline) {
       provider = this.mockProvider;
     } else if (this.typesafeProvider instanceof TypeSafeSystemOneProvider) {
+      const configuredKey = config.system_one?.apiKey?.trim();
+      const effectiveKey = configuredKey || process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY;
       provider = new TypeSafeSystemOneProvider({
-        apiKey: config.system_one?.apiKey,
+        ...(effectiveKey ? { apiKey: effectiveKey } : {}),
         baseUrl: config.system_one?.baseUrl,
         model: config.system_one?.model || 'jev-latest',
         timeoutMs: config.system_one?.timeout_ms,
-        strict: Boolean(options.strict || options.requireSemantic),
+        strict: false,
         fallbackProvider: this.mockProvider,
       });
     } else {
@@ -508,8 +518,13 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       if (cacheEnabled) {
         const cached = await cache.get(cacheKey);
         if (cached && cached.length > 0) {
-          semanticDecisions = cached;
-          cacheHit = true;
+          // If requireSemantic is enabled, ensure cached entry is genuine TypeSafe and not mock/fallback
+          const cachedIsMockOrFallback =
+            cached.some((d) => d.provider === 'mock' || d.metadata?.fallback === true);
+          if (!options.requireSemantic || !cachedIsMockOrFallback) {
+            semanticDecisions = cached;
+            cacheHit = true;
+          }
         }
       }
 
@@ -521,7 +536,11 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
           semanticDecisions = await provider.evaluate(semanticContext, questions);
         }
 
-        if (cacheEnabled && semanticDecisions.length > 0) {
+        // Cache anti-pollution: strictly persist genuine live TypeSafe evaluations, never mock or fallback
+        const isFallback =
+          provider.name === 'mock' ||
+          semanticDecisions.some((d) => d.metadata?.fallback === true);
+        if (cacheEnabled && semanticDecisions.length > 0 && provider.name === 'typesafe' && !isFallback) {
           await cache.set(cacheKey, provider.name, modelKey, semanticDecisions);
         }
       }
@@ -611,7 +630,8 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
 
     if (checkResult.findings && checkResult.findings.length > 0) {
       try {
-        const store = new FileFindingStore(cwd);
+        const repoRoot = context.repository?.rootPath ?? (await this.gitAdapter.getRepositoryRoot(cwd).catch(() => cwd));
+        const store = new FileFindingStore(repoRoot);
         await store.save(checkResult.findings);
       } catch {
         // ignore storage write errors
@@ -645,7 +665,8 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     if (options.findingIds && options.findingIds.length > 0) {
       let allStored: Finding[] = [];
       try {
-        const store = new FileFindingStore(cwd);
+        const repoRoot = await this.gitAdapter.getRepositoryRoot(cwd).catch(() => cwd);
+        const store = new FileFindingStore(repoRoot);
         allStored = await store.list();
       } catch {
         // ignore

@@ -132,7 +132,7 @@ export interface ContextBudgetConfig {
 export interface SystemOneConfig {
   /** Provider implementation: 'typesafe' (live API) | 'mock' (offline deterministic) */
   provider?: 'typesafe' | 'mock' | string;
-  /** Model name or endpoint identifier (default: 'jev') */
+  /** Model name or endpoint identifier (default: 'jev-latest') */
   model?: string;
   /** Request timeout in milliseconds (default: 10000) */
   timeout_ms?: number;
