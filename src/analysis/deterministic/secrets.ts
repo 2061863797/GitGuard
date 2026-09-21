@@ -257,3 +257,71 @@ export function scanDiffForSecrets(
 
   return violations;
 }
+
+/**
+ * Scans full textual content of a file for secrets and credentials.
+ * Used during verification to prevent resolving secret findings when credentials
+ * were committed into repository history or remain present in working tree files.
+ */
+export function scanContentForSecrets(
+  content: string,
+  filePath: string,
+  patterns: SecretPattern[] = SECRET_PATTERNS
+): DeterministicViolation[] {
+  const violations: DeterministicViolation[] = [];
+  if (!content || typeof content !== 'string') {
+    return violations;
+  }
+
+  const rawLines = content.split(/\r?\n/);
+  const reportedLineRule = new Set<string>();
+
+  // 1. Single line scanning
+  for (let i = 0; i < rawLines.length; i++) {
+    const lineText = rawLines[i];
+    const lineNumber = i + 1;
+
+    for (const pattern of patterns) {
+      const match = lineText.match(pattern.regex);
+      if (!match) {
+        continue;
+      }
+
+      const matchedSecret =
+        pattern.extractGroup !== undefined && match[pattern.extractGroup]
+          ? match[pattern.extractGroup]
+          : match[0];
+
+      const lowerMatch = matchedSecret.toLowerCase();
+      if (
+        lowerMatch === 'placeholder' ||
+        lowerMatch === 'changeme' ||
+        lowerMatch === 'your_secret_here'
+      ) {
+        continue;
+      }
+
+      const key = `${filePath}:${pattern.rule}:${lineNumber}`;
+      if (reportedLineRule.has(key)) {
+        continue;
+      }
+      reportedLineRule.add(key);
+
+      const redactedSnippet = redactSecret(matchedSecret);
+
+      violations.push({
+        file: filePath,
+        line: lineNumber,
+        rule: pattern.rule,
+        message: `Potential ${pattern.description} detected in file content: ${redactedSnippet}`,
+        severity: 'block',
+      });
+    }
+  }
+
+  // 2. Multiline scanning
+  const run = rawLines.map((line, idx) => ({ content: line, newLineNumber: idx + 1 }));
+  scanConsecutiveAdditionLines(run, filePath, patterns, reportedLineRule, violations);
+
+  return violations;
+}

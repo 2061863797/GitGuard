@@ -5,12 +5,14 @@
  * and re-verification resolution.
  */
 
+import * as crypto from 'node:crypto';
 import type {
   Finding,
   FindingFilter,
   FindingFingerprintInput,
   FindingManager,
   FindingStatus,
+  FindingProvenance,
   VerificationReport,
 } from '../types/finding.js';
 import type { RuleMatch, GateVerdict } from '../types/policy.js';
@@ -221,6 +223,16 @@ export class DefaultFindingManager implements FindingManager {
           ? match.expectedEvidence
           : getDefaultExpectedEvidence(match.ruleId, match.status);
 
+      const diffHash = context.diff?.raw
+        ? crypto.createHash('sha256').update(context.diff.raw).digest('hex').slice(0, 16)
+        : undefined;
+
+      const provenance: FindingProvenance = {
+        detectedHeadSha: context.repository?.headSha || '',
+        detectionScope: (context.diff as any)?.scope || 'all',
+        diffHash,
+      };
+
       const finding: Finding = {
         id,
         ruleId: match.ruleId,
@@ -235,6 +247,7 @@ export class DefaultFindingManager implements FindingManager {
         expectedEvidence,
         fingerprint,
         createdAt: timestamp,
+        provenance,
         metadata: match.score !== undefined ? { score: match.score } : undefined,
       };
 

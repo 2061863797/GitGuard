@@ -99,8 +99,24 @@ export interface Finding {
   createdAt: string;
   /** ISO timestamp when the finding was resolved, if applicable */
   resolvedAt?: string;
+  /** Git detection provenance captured at generation time */
+  provenance?: FindingProvenance;
   /** Arbitrary metadata */
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Detection provenance capturing repository git state at the moment the finding was generated.
+ */
+export interface FindingProvenance {
+  /** HEAD commit SHA when the finding was detected */
+  detectedHeadSha: string;
+  /** Git change scope used during detection */
+  detectionScope: string;
+  /** Diff SHA-256 hash at detection time */
+  diffHash?: string;
+  /** Commit SHA if detected on a commit scope */
+  commitSha?: string;
 }
 
 /**

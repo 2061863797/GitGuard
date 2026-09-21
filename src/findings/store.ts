@@ -8,7 +8,9 @@
 import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
 import * as path from 'node:path';
+import * as crypto from 'node:crypto';
 import type { Finding, FindingFilter } from '../types/finding.js';
+import { GitGuardError } from '../types/errors.js';
 
 /**
  * Finds nearest ancestor directory containing a .git directory or file.
@@ -152,50 +154,81 @@ export class FileFindingStore implements FindingStore {
 
   /**
    * Acquires cross-process atomic file lock using O_CREAT | O_EXCL ('wx').
-   * Recovers automatically from stale locks (> 10s).
+   * Employs owner token protection to prevent accidental lock stealing or premature deletion.
    */
-  private async acquireFileLock(timeoutMs = 10000): Promise<(() => Promise<void>) | null> {
+  private async acquireFileLock(timeoutMs = 10000): Promise<(() => Promise<void>)> {
     const start = Date.now();
     const dir = path.dirname(this.lockPath);
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch {
-      return null;
+      return async () => {};
     }
+
+    const ownerToken = crypto.randomUUID();
 
     while (Date.now() - start < timeoutMs) {
       try {
         const handle = await fs.open(this.lockPath, 'wx');
         try {
-          await handle.writeFile(JSON.stringify({ pid: process.pid, time: Date.now() }), 'utf8');
+          await handle.writeFile(
+            JSON.stringify({ pid: process.pid, time: Date.now(), token: ownerToken }),
+            'utf8'
+          );
         } finally {
           await handle.close();
         }
+
         return async () => {
           try {
-            await fs.unlink(this.lockPath);
+            const content = await fs.readFile(this.lockPath, 'utf8');
+            const data = JSON.parse(content);
+            if (data?.token === ownerToken) {
+              await fs.unlink(this.lockPath);
+            }
           } catch {
-            // ignore
+            // Lock may have already been cleaned up
           }
         };
       } catch (err: any) {
         if (err?.code === 'EEXIST') {
+          // Check for stale lock (> 10s)
           try {
             const stat = await fs.stat(this.lockPath);
             if (Date.now() - stat.mtimeMs > 10000) {
-              await fs.unlink(this.lockPath).catch(() => {});
+              const raw = await fs.readFile(this.lockPath, 'utf8').catch(() => '');
+              let isAlive = false;
+              try {
+                const data = JSON.parse(raw);
+                if (data?.pid && typeof data.pid === 'number') {
+                  process.kill(data.pid, 0);
+                  isAlive = true;
+                }
+              } catch {
+                isAlive = false;
+              }
+              if (!isAlive) {
+                await fs.unlink(this.lockPath).catch(() => {});
+              }
             }
           } catch {
             // lock file may have been unlinked in between
           }
           const jitter = Math.floor(Math.random() * 50) + 50;
           await new Promise((r) => setTimeout(r, jitter));
+        } else if (err?.code === 'EACCES' || err?.code === 'EROFS') {
+          return async () => {};
         } else {
-          return null;
+          throw err;
         }
       }
     }
-    return null;
+
+    throw new GitGuardError(
+      `Failed to acquire finding store file lock within ${timeoutMs}ms: ${this.lockPath}`,
+      'FINDING_STORE_LOCK_TIMEOUT',
+      1
+    );
   }
 
   private async withLock<T>(op: () => Promise<T>): Promise<T> {

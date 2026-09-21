@@ -1,6 +1,6 @@
 {
   "name": "gitguard",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Repository-aware change verification and quality gate system in TypeScript",
   "type": "module",
   "main": "./dist/index.js",
@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "commander": "^15.0.0",
+    "commander": "^14.0.3",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"
   },

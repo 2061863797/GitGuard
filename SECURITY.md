@@ -56,10 +56,11 @@ GitGuard operates as a repository-aware verification engine that interacts with 
 4. **Prompt Injection & Adversarial Diff Mitigation**:
    - Code diffs and commit messages could contain adversarial text attempting to trick AI evaluators. GitGuard structures evaluation questions with strict schemas (`noul`, `choice`, `score`) and typed criteria, rather than free-form unconstrained prompts, minimizing prompt injection attack surface.
 
-5. **Trust Boundary & Secret Exfiltration Defense**:
-   - Untrusted repository configuration (`.gitguard.yml`) is strictly prohibited from overriding `system_one.baseUrl` to third-party endpoints. This prevents malicious repositories from exfiltrating developer or CI `TYPESAFE_API_KEY` credentials to unauthorized servers. Custom provider URLs are only permitted when explicitly overridden via environment variables or validated system flags.
-   - Cache directory paths (`gate.cache.directory`) are verified with path traversal protections to prevent writes outside repository boundaries.
-   - Finding store files and caches utilize cross-process atomic file locking (`O_CREAT | O_EXCL`) to guarantee state integrity under concurrent multi-agent environments.
+5. **Trust Boundary, Verification Integrity & Secret Exfiltration Defense**:
+   - Untrusted repository configuration (`.gitguard.yml`) is strictly prohibited from overriding `system_one.baseUrl` to third-party endpoints. This prevents malicious repositories from exfiltrating developer or CI `TYPESAFE_API_KEY` credentials to unauthorized servers. Custom provider URLs are only permitted when explicitly overridden via environment variables or validated `--allow-custom-provider` CLI flags.
+   - Cache directory paths (`gate.cache.directory`) are strictly confined to `.git/gitguard/cache/` namespaces with path traversal protections to prevent writes outside repository boundaries. Live semantic caches are isolated by provider and bypassed when `--offline` is active.
+   - Finding store files and caches utilize fail-closed cross-process atomic file locking (`O_CREAT | O_EXCL`) with unique owner tokens and process liveness detection (`process.kill(pid, 0)`) to guarantee state integrity under concurrent multi-agent environments.
+   - **Baseline Drift Detection**: The verification engine tracks finding provenance (commit SHA, scope, diff hashes) and verifies file contents at `HEAD`. If an agent commits a policy violation into repository history instead of remediating it, GitGuard detects the committed violation, refuses false resolution, revives the finding, and maintains `BLOCK`.
 
 ---
 

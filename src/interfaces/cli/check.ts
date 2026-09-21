@@ -28,6 +28,7 @@ export interface CheckCliOptions {
   findings?: string;
   cwd?: string;
   silent?: boolean;
+  allowCustomProvider?: boolean;
 }
 
 export async function checkCommand(
@@ -69,6 +70,7 @@ export async function checkCommand(
       requireSemantic: options.requireSemantic,
       noCache: options.noCache,
       findingIds,
+      allowCustomProvider: options.allowCustomProvider,
     };
 
     const result = await engine.check(checkOpts);

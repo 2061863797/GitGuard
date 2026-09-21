@@ -45,6 +45,7 @@ import {
   SecurityViolationError,
 } from '../types/errors.js';
 import { SemanticCache } from '../cache/semantic-cache.js';
+import { scanContentForSecrets, SECRET_PATTERNS, type SecretPattern } from '../analysis/deterministic/secrets.js';
 
 /**
  * Dependency injection options for DefaultGitGuardEngine.
@@ -496,6 +497,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       instructionsFingerprint: instructionsFp,
       contextFingerprint: contextFp,
       questionsFingerprint: questionsFp,
+      provider: provider.name,
     });
 
     let semanticDecisions: SemanticDecision[] = [];
@@ -560,7 +562,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         },
       ];
     } else {
-      if (cacheEnabled) {
+      if (cacheEnabled && !isOffline) {
         const cached = await cache.get(cacheKey);
         if (cached && cached.length > 0) {
           // If requireSemantic is enabled, ensure cached entry is genuine TypeSafe and not mock/fallback
@@ -585,7 +587,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         const isFallback =
           provider.name === 'mock' ||
           semanticDecisions.some((d) => d.metadata?.fallback === true);
-        if (cacheEnabled && semanticDecisions.length > 0 && provider.name === 'typesafe' && !isFallback) {
+        if (cacheEnabled && !isOffline && semanticDecisions.length > 0 && provider.name === 'typesafe' && !isFallback) {
           await cache.set(cacheKey, provider.name, modelKey, semanticDecisions);
         }
       }
@@ -792,6 +794,83 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       basePrevious,
       freshCheck.findings
     );
+
+    // Baseline Drift and committed violation verification:
+    // Ensure findings were not falsely marked as resolved merely because the offending code was committed into HEAD.
+    const currentHeadSha = await this.gitAdapter.getHeadSha(repoRoot);
+    const validatedResolved: string[] = [];
+    const revivedFindings: Finding[] = [];
+    const previousMap = new Map<string, Finding>(basePrevious.map((f) => [f.id, f]));
+
+    for (const resId of report.resolved) {
+      const prev = previousMap.get(resId);
+      if (!prev) {
+        validatedResolved.push(resId);
+        continue;
+      }
+
+      let isStillViolating = false;
+      let violationReason = '';
+
+      // Check if secret finding was committed into HEAD or still present in file
+      if (prev.ruleId.includes('secret') || prev.id.includes('secret')) {
+        const config = await this.resolveConfig(cwd, options.config, options.configPath);
+        let secretPatterns: SecretPattern[] = SECRET_PATTERNS;
+        const userPatterns = config.deterministic?.secret_scan?.patterns;
+        if (userPatterns && userPatterns.length > 0) {
+          const customPatterns: SecretPattern[] = userPatterns.map((p, idx) => ({
+            rule: `custom_secret_${idx + 1}`,
+            description: `User-defined secret pattern: ${p}`,
+            regex: new RegExp(p),
+          }));
+          secretPatterns = [...SECRET_PATTERNS, ...customPatterns];
+        }
+
+        for (const relFile of prev.affectedFiles || []) {
+          const headContent = await this.gitAdapter.getFileContent(relFile, 'HEAD', repoRoot);
+          const workContent = await this.gitAdapter.getFileContent(relFile, undefined, repoRoot);
+
+          if (headContent) {
+            const headViolations = scanContentForSecrets(headContent, relFile, secretPatterns);
+            if (headViolations.length > 0) {
+              isStillViolating = true;
+              violationReason = `Secret is still committed in repository HEAD in '${relFile}' (${headViolations[0].rule})`;
+              break;
+            }
+          }
+          if (workContent) {
+            const workViolations = scanContentForSecrets(workContent, relFile, secretPatterns);
+            if (workViolations.length > 0) {
+              isStillViolating = true;
+              violationReason = `Secret is still present in working file '${relFile}' (${workViolations[0].rule})`;
+              break;
+            }
+          }
+        }
+      }
+
+      if (isStillViolating) {
+        const revived: Finding = {
+          ...prev,
+          lifecycle: 'active',
+          message: `${prev.message} [Unresolved: ${violationReason}]`,
+        };
+        revivedFindings.push(revived);
+        if (this.findingManager.storeFinding) {
+          this.findingManager.storeFinding(revived);
+        }
+      } else {
+        validatedResolved.push(resId);
+      }
+    }
+
+    if (revivedFindings.length > 0) {
+      report.resolved = validatedResolved;
+      report.resolvedFindings = validatedResolved;
+      report.remaining = [...report.remaining, ...revivedFindings.map((f) => f.id)];
+      report.remainingFindings = report.remaining;
+      report.findings = [...report.findings, ...revivedFindings];
+    }
 
     // 4. Scoped targeted evaluation & comprehensive gate synthesis
     let targetsResolved = false;

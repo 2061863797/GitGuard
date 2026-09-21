@@ -24,25 +24,25 @@ export class SemanticCache {
   private cacheDir: string;
   private enabled: boolean;
 
-  constructor(repoRoot: string = process.cwd(), enabled = true, customDir?: string) {
+  constructor(repoRoot: string = process.cwd(), enabled = true, customDirOrNamespace?: string) {
     const resolvedRoot = findNearestGitRoot(repoRoot);
     const gitDir = resolveGitDir(resolvedRoot);
-    if (customDir && customDir.trim() !== '') {
-      const resolvedCustom = path.isAbsolute(customDir)
-        ? path.resolve(customDir)
-        : path.resolve(resolvedRoot, customDir);
-      const normalizedRoot = path.resolve(resolvedRoot);
-      const normalizedGitDir = path.resolve(gitDir);
-      const isInsideRepo = resolvedCustom.startsWith(normalizedRoot + path.sep) || resolvedCustom === normalizedRoot;
-      const isInsideGit = resolvedCustom.startsWith(normalizedGitDir + path.sep) || resolvedCustom === normalizedGitDir;
-      if (!isInsideRepo && !isInsideGit) {
+    const baseCacheDir = path.join(gitDir, 'gitguard', 'cache');
+
+    if (customDirOrNamespace && customDirOrNamespace.trim() !== '') {
+      const sanitized = customDirOrNamespace.trim().replace(/^[\\/]+|[\\/]+$/g, '');
+      const candidate = path.isAbsolute(sanitized)
+        ? path.resolve(sanitized)
+        : path.resolve(baseCacheDir, sanitized);
+      const normalizedBase = path.resolve(baseCacheDir);
+      if (!candidate.startsWith(normalizedBase + path.sep) && candidate !== normalizedBase) {
         throw new SecurityViolationError(
-          `Configured cache directory escapes repository boundary: "${customDir}". Cache must reside strictly inside repository or git directory.`
+          `Configured cache path escapes git state directory: "${customDirOrNamespace}". Cache must reside strictly inside .git/gitguard/cache/.`
         );
       }
-      this.cacheDir = resolvedCustom;
+      this.cacheDir = candidate;
     } else {
-      this.cacheDir = path.join(gitDir, 'gitguard', 'cache');
+      this.cacheDir = baseCacheDir;
     }
     this.enabled = enabled;
   }
@@ -59,11 +59,13 @@ export class SemanticCache {
       instructionsFingerprint?: string;
       contextFingerprint?: string;
       questionsFingerprint?: string;
+      provider?: string;
     }
   ): string {
     const sortedQuestions = [...questionIds].sort().join(',');
+    const providerTag = extraContext?.provider ? `|provider:${extraContext.provider}` : '';
     const extra = extraContext
-      ? `|extra:${extraContext.instructionsFingerprint || ''}:${extraContext.contextFingerprint || ''}:${extraContext.questionsFingerprint || ''}`
+      ? `|extra:${extraContext.instructionsFingerprint || ''}:${extraContext.contextFingerprint || ''}:${extraContext.questionsFingerprint || ''}${providerTag}`
       : '';
     const content = `diff:${rawDiff}|task:${task}|model:${model}|questions:${sortedQuestions}${extra}`;
     return crypto.createHash('sha256').update(content).digest('hex');

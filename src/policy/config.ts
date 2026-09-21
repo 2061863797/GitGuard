@@ -176,12 +176,13 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
       );
     }
     if (obj.system_one.baseUrl !== undefined) {
-      const rawUrl = String(obj.system_one.baseUrl).trim();
+      const rawUrl = String(obj.system_one.baseUrl).trim().replace(/\/+$/, '');
       const isOfficial =
         rawUrl === 'https://api.typesafe.ai' ||
-        rawUrl === 'https://api.typesafe.ai/' ||
+        rawUrl === 'https://api.typesafe.ai/v1' ||
         rawUrl === 'https://api.typesafe.ai/v1/systemone' ||
-        rawUrl === 'https://api.typesafe.ai/v1/systemone/';
+        rawUrl.startsWith('http://localhost') ||
+        rawUrl.startsWith('http://127.0.0.1');
       if (!isOfficial) {
         errors.push(
           `Repository configuration (.gitguard.yml) cannot override system_one.baseUrl to custom endpoint ('${rawUrl}') to prevent API key exfiltration. Use the TYPESAFE_BASE_URL environment variable or --allow-custom-provider CLI flag instead.`

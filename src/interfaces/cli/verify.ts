@@ -21,6 +21,7 @@ export interface VerifyCliOptions {
   targetOnly?: boolean;
   cwd?: string;
   silent?: boolean;
+  allowCustomProvider?: boolean;
 }
 
 export async function verifyCommand(
@@ -44,6 +45,7 @@ export async function verifyCommand(
       offline: options.offline,
       targetOnly: options.targetOnly,
       cwd: options.cwd,
+      allowCustomProvider: options.allowCustomProvider,
     };
 
     const report = await engine.verify(verifyOpts);

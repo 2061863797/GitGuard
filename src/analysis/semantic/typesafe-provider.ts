@@ -120,7 +120,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
     this.baseUrl =
       options?.baseUrl ||
       process.env.TYPESAFE_BASE_URL ||
-      'https://api.typesafe.ai/v1';
+      'https://api.typesafe.ai';
 
     try {
       const url = new URL(this.baseUrl);
@@ -276,13 +276,18 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
     context: EvaluationContext,
     questions: SemanticQuestion[]
   ): Promise<{ decisions: SemanticDecision[]; effectiveModel: string }> {
-    // Normalization: append /systemone if not already present
+    // Canonical endpoint resolution for TypeSafe System One
     const base = this.baseUrl.replace(/\/+$/, '');
-    const endpoint = base.endsWith('/systemone')
-      ? base
-      : base.endsWith('/v1')
-        ? `${base}/systemone`
-        : `${base}/systemone`;
+    let endpoint: string;
+    if (base.endsWith('/v1/systemone')) {
+      endpoint = base;
+    } else if (base.endsWith('/systemone')) {
+      endpoint = base;
+    } else if (base.endsWith('/v1')) {
+      endpoint = `${base}/systemone`;
+    } else {
+      endpoint = `${base}/v1/systemone`;
+    }
 
     // 1. Build questions map per official System One specification
     const questionsMap: Record<string, TypeSafeQuestionPayload> = {};

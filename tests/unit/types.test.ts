@@ -15,7 +15,7 @@ import {
 
 describe('GitGuard Scaffolding & Core Types', () => {
   it('should export correct library version', () => {
-    expect(GITGUARD_VERSION).toBe('0.2.4');
+    expect(GITGUARD_VERSION).toBe('0.2.5');
   });
 
   describe('Domain Error Hierarchy', () => {

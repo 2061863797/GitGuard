@@ -61,6 +61,7 @@ export function createCliProgram(): Command {
     .option('--require-semantic', 'Require live TypeSafe Jev provider; exit with code 2 if unavailable')
     .option('--no-cache', 'Bypass evaluation cache')
     .option('--findings <ids>', 'Comma-separated list of finding IDs to check')
+    .option('--allow-custom-provider', 'Allow custom system_one provider endpoint beyond official TypeSafe domain')
     .option('--cwd <path>', 'Repository working directory path')
     .action(async (range, options) => {
       const outcome = await checkCommand(range, options);
@@ -100,6 +101,7 @@ export function createCliProgram(): Command {
     .option('--json', 'Output results as formatted JSON')
     .option('--offline', 'Force local offline/mock semantic provider')
     .option('--target-only', 'Verify resolution of targeted findings only, ignoring other repository blockers')
+    .option('--allow-custom-provider', 'Allow custom system_one provider endpoint beyond official TypeSafe domain')
     .option('--cwd <path>', 'Repository working directory path')
     .action(async (options) => {
       const outcome = await verifyCommand(options);
