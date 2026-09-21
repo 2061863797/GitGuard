@@ -198,8 +198,12 @@ export async function executeMcpTool(
         const unrelatedProb =
           result.semanticDecisions?.unrelated_changes?.probability ?? 0.0;
 
-        const effectiveProvider =
-          result.semanticDecisions?.task_completed?.provider || 'mock';
+        const decisions = Object.values(result.semanticDecisions || {});
+        const firstDecision = decisions[0];
+        const effectiveProvider = firstDecision?.provider || 'mock';
+        const fallback = firstDecision?.metadata?.fallback ?? (effectiveProvider === 'mock');
+        const requestedProvider = firstDecision?.metadata?.requestedProvider || effectiveProvider;
+        const model = (result.metadata as any)?.model || firstDecision?.metadata?.effectiveModel || 'jev-latest';
 
         const payload = {
           status: result.status,
@@ -208,10 +212,10 @@ export async function executeMcpTool(
           taskScopeMatch: scopeMatchProb,
           unrelatedChanges: unrelatedProb,
           semantic: {
-            requestedProvider: 'typesafe',
+            requestedProvider,
             effectiveProvider,
-            fallback: effectiveProvider.includes('mock'),
-            model: (result.metadata as any)?.model || 'jev-latest',
+            fallback,
+            model,
           },
           findings: result.findings,
           summary: result.verdictSummary,
@@ -241,8 +245,12 @@ export async function executeMcpTool(
           deterministicMap[det.id] = det.status;
         }
 
-        const effectiveProvider =
-          Object.values(result.semanticDecisions || {})[0]?.provider || 'mock';
+        const decisions = Object.values(result.semanticDecisions || {});
+        const firstDecision = decisions[0];
+        const effectiveProvider = firstDecision?.provider || 'mock';
+        const fallback = firstDecision?.metadata?.fallback ?? (effectiveProvider === 'mock');
+        const requestedProvider = firstDecision?.metadata?.requestedProvider || effectiveProvider;
+        const model = (result.metadata as any)?.model || firstDecision?.metadata?.effectiveModel || 'jev-latest';
 
         const payload = {
           status: result.status,
@@ -250,10 +258,10 @@ export async function executeMcpTool(
           canCommit,
           deterministic: deterministicMap,
           semantic: {
-            requestedProvider: 'typesafe',
+            requestedProvider,
             effectiveProvider,
-            fallback: effectiveProvider.includes('mock'),
-            model: (result.metadata as any)?.model || 'jev-latest',
+            fallback,
+            model,
           },
           findings: result.findings,
           summary: result.verdictSummary,

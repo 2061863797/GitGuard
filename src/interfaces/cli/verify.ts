@@ -18,6 +18,7 @@ export interface VerifyCliOptions {
   format?: string;
   json?: boolean;
   offline?: boolean;
+  targetOnly?: boolean;
   cwd?: string;
   silent?: boolean;
 }
@@ -41,6 +42,7 @@ export async function verifyCommand(
       scope: (options.scope as ChangeScope) ?? 'all',
       configPath: options.config,
       offline: options.offline,
+      targetOnly: options.targetOnly,
       cwd: options.cwd,
     };
 

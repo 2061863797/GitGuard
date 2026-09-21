@@ -65,6 +65,10 @@ export interface CheckOptions extends InspectOptions {
   findingIds?: string[];
   /** Evaluate only task completion semantics (task_completed, task_scope_match, unrelated_changes) */
   taskOnly?: boolean;
+  /** Running in verification mode: clean changesets do not artificially fail task_completed */
+  verifyMode?: boolean;
+  /** Explicitly allow custom provider endpoints beyond official TypeSafe domain */
+  allowCustomProvider?: boolean;
 }
 
 /**
@@ -100,6 +104,8 @@ export interface VerifyOptions {
   offline?: boolean;
   /** Bypass evaluation cache */
   noCache?: boolean;
+  /** Explicitly allow custom provider endpoints beyond official TypeSafe domain */
+  allowCustomProvider?: boolean;
 }
 
 /**

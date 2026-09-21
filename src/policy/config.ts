@@ -103,7 +103,6 @@ export const DEFAULT_POLICY_CONFIG: PolicyConfig = {
     block_on: ['BLOCK'],
     cache: {
       enabled: true,
-      directory: '.git/gitguard/cache',
     },
   },
 };
@@ -175,6 +174,53 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
       errors.push(
         'Storing apiKey directly in .gitguard.yml is forbidden for credential security. Set the TYPESAFE_API_KEY environment variable instead.'
       );
+    }
+    if (obj.system_one.baseUrl !== undefined) {
+      const rawUrl = String(obj.system_one.baseUrl).trim();
+      const isOfficial =
+        rawUrl === 'https://api.typesafe.ai' ||
+        rawUrl === 'https://api.typesafe.ai/' ||
+        rawUrl === 'https://api.typesafe.ai/v1/systemone' ||
+        rawUrl === 'https://api.typesafe.ai/v1/systemone/';
+      if (!isOfficial) {
+        errors.push(
+          `Repository configuration (.gitguard.yml) cannot override system_one.baseUrl to custom endpoint ('${rawUrl}') to prevent API key exfiltration. Use the TYPESAFE_BASE_URL environment variable or --allow-custom-provider CLI flag instead.`
+        );
+      }
+    }
+  }
+
+  if (obj.gate?.cache?.directory !== undefined) {
+    const dir = String(obj.gate.cache.directory).trim();
+    if (path.isAbsolute(dir) || dir.startsWith('/') || dir.startsWith('\\') || /^[a-zA-Z]:/.test(dir)) {
+      errors.push(
+        `gate.cache.directory cannot be an absolute path ("${dir}"). Cache directory must reside within repository boundaries.`
+      );
+    } else if (dir.split(/[/\\]/).includes('..')) {
+      errors.push(
+        `gate.cache.directory cannot contain path traversal ("${dir}"). Cache directory must reside within repository boundaries.`
+      );
+    }
+  }
+
+  if (obj.deterministic?.secret_scan?.patterns !== undefined) {
+    if (!Array.isArray(obj.deterministic.secret_scan.patterns)) {
+      errors.push('deterministic.secret_scan.patterns must be an array of regex strings');
+    } else {
+      for (let i = 0; i < obj.deterministic.secret_scan.patterns.length; i++) {
+        const pattern = obj.deterministic.secret_scan.patterns[i];
+        if (typeof pattern !== 'string' || !pattern.trim()) {
+          errors.push(`deterministic.secret_scan.patterns[${i}] must be a non-empty string`);
+        } else if (pattern.length > 500) {
+          errors.push(`deterministic.secret_scan.patterns[${i}] exceeds maximum allowed length of 500 characters`);
+        } else {
+          try {
+            new RegExp(pattern);
+          } catch (err: any) {
+            errors.push(`deterministic.secret_scan.patterns[${i}] is an invalid regular expression: ${err.message}`);
+          }
+        }
+      }
     }
   }
 

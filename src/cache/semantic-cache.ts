@@ -10,6 +10,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { SemanticDecision } from '../types/provider.js';
 import { findNearestGitRoot, resolveGitDir } from '../findings/store.js';
+import { SecurityViolationError } from '../types/errors.js';
 
 export interface SemanticCacheEntry {
   cacheKey: string;
@@ -27,9 +28,19 @@ export class SemanticCache {
     const resolvedRoot = findNearestGitRoot(repoRoot);
     const gitDir = resolveGitDir(resolvedRoot);
     if (customDir && customDir.trim() !== '') {
-      this.cacheDir = path.isAbsolute(customDir)
-        ? customDir
+      const resolvedCustom = path.isAbsolute(customDir)
+        ? path.resolve(customDir)
         : path.resolve(resolvedRoot, customDir);
+      const normalizedRoot = path.resolve(resolvedRoot);
+      const normalizedGitDir = path.resolve(gitDir);
+      const isInsideRepo = resolvedCustom.startsWith(normalizedRoot + path.sep) || resolvedCustom === normalizedRoot;
+      const isInsideGit = resolvedCustom.startsWith(normalizedGitDir + path.sep) || resolvedCustom === normalizedGitDir;
+      if (!isInsideRepo && !isInsideGit) {
+        throw new SecurityViolationError(
+          `Configured cache directory escapes repository boundary: "${customDir}". Cache must reside strictly inside repository or git directory.`
+        );
+      }
+      this.cacheDir = resolvedCustom;
     } else {
       this.cacheDir = path.join(gitDir, 'gitguard', 'cache');
     }

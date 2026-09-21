@@ -18,7 +18,7 @@ describe('Version Alignment Contract', () => {
     const pkgPath = path.resolve(process.cwd(), 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     expect(pkg.version).toBe(GITGUARD_VERSION);
-    expect(pkg.version).toBe('0.2.3');
+    expect(pkg.version).toBe('0.2.4');
   });
 
   it('MCP server initialization reports version strictly matching GITGUARD_VERSION', async () => {
@@ -35,7 +35,7 @@ describe('Version Alignment Contract', () => {
 
     const initResult = client.getServerVersion();
     expect(initResult?.version).toBe(GITGUARD_VERSION);
-    expect(initResult?.version).toBe('0.2.3');
+    expect(initResult?.version).toBe('0.2.4');
 
     await client.close();
     await server.close();

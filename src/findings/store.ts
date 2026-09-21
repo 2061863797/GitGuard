@@ -137,14 +137,65 @@ export class MemoryFindingStore implements FindingStore {
  */
 export class FileFindingStore implements FindingStore {
   private storePath: string;
+  private lockPath: string;
   private memoryFallback: MemoryFindingStore;
   private mutexQueue: Promise<void> = Promise.resolve();
 
   constructor(repoRoot: string = process.cwd()) {
     const resolvedRoot = findNearestGitRoot(repoRoot);
     const gitDir = resolveGitDir(resolvedRoot);
-    this.storePath = path.join(gitDir, 'gitguard', 'findings.json');
+    const gitguardDir = path.join(gitDir, 'gitguard');
+    this.storePath = path.join(gitguardDir, 'findings.json');
+    this.lockPath = path.join(gitguardDir, 'findings.lock');
     this.memoryFallback = new MemoryFindingStore();
+  }
+
+  /**
+   * Acquires cross-process atomic file lock using O_CREAT | O_EXCL ('wx').
+   * Recovers automatically from stale locks (> 10s).
+   */
+  private async acquireFileLock(timeoutMs = 10000): Promise<(() => Promise<void>) | null> {
+    const start = Date.now();
+    const dir = path.dirname(this.lockPath);
+    try {
+      await fs.mkdir(dir, { recursive: true });
+    } catch {
+      return null;
+    }
+
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const handle = await fs.open(this.lockPath, 'wx');
+        try {
+          await handle.writeFile(JSON.stringify({ pid: process.pid, time: Date.now() }), 'utf8');
+        } finally {
+          await handle.close();
+        }
+        return async () => {
+          try {
+            await fs.unlink(this.lockPath);
+          } catch {
+            // ignore
+          }
+        };
+      } catch (err: any) {
+        if (err?.code === 'EEXIST') {
+          try {
+            const stat = await fs.stat(this.lockPath);
+            if (Date.now() - stat.mtimeMs > 10000) {
+              await fs.unlink(this.lockPath).catch(() => {});
+            }
+          } catch {
+            // lock file may have been unlinked in between
+          }
+          const jitter = Math.floor(Math.random() * 50) + 50;
+          await new Promise((r) => setTimeout(r, jitter));
+        } else {
+          return null;
+        }
+      }
+    }
+    return null;
   }
 
   private async withLock<T>(op: () => Promise<T>): Promise<T> {
@@ -153,9 +204,14 @@ export class FileFindingStore implements FindingStore {
     const prevLock = this.mutexQueue;
     this.mutexQueue = prevLock.then(() => nextLock);
     await prevLock;
+    let releaseFileLock: (() => Promise<void>) | null = null;
     try {
+      releaseFileLock = await this.acquireFileLock();
       return await op();
     } finally {
+      if (releaseFileLock) {
+        await releaseFileLock();
+      }
       release!();
     }
   }

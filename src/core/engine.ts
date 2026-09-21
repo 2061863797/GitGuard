@@ -39,7 +39,11 @@ import { DefaultPolicyEngine } from '../policy/engine.js';
 import { DefaultFindingManager } from '../findings/manager.js';
 import { FileFindingStore } from '../findings/store.js';
 import { loadConfig } from '../policy/config.js';
-import { NotAGitRepositoryError } from '../types/errors.js';
+import {
+  NotAGitRepositoryError,
+  ConfigurationError,
+  SecurityViolationError,
+} from '../types/errors.js';
 import { SemanticCache } from '../cache/semantic-cache.js';
 
 /**
@@ -393,6 +397,21 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     } else if (this.typesafeProvider instanceof TypeSafeSystemOneProvider) {
       const configuredKey = config.system_one?.apiKey?.trim();
       const effectiveKey = configuredKey || process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY;
+      const configuredBaseUrl = config.system_one?.baseUrl?.trim();
+      if (configuredBaseUrl && !options.allowCustomProvider && !process.env.TYPESAFE_BASE_URL) {
+        try {
+          const parsed = new URL(configuredBaseUrl);
+          const allowedHosts = ['api.typesafe.ai', 'localhost', '127.0.0.1'];
+          if (!allowedHosts.includes(parsed.hostname.toLowerCase())) {
+            throw new SecurityViolationError(
+              `Custom system_one.baseUrl [${configuredBaseUrl}] is forbidden in repository policy configuration to prevent API key exfiltration.`
+            );
+          }
+        } catch (err: any) {
+          if (err instanceof SecurityViolationError) throw err;
+          throw new ConfigurationError(`Invalid system_one.baseUrl format: ${configuredBaseUrl}`);
+        }
+      }
       provider = new TypeSafeSystemOneProvider({
         ...(effectiveKey ? { apiKey: effectiveKey } : {}),
         baseUrl: config.system_one?.baseUrl,
@@ -470,7 +489,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     const instructionsFp = crypto.createHash('sha256').update(JSON.stringify(context.instructions || [])).digest('hex').slice(0, 16);
     const surroundingFp = crypto.createHash('sha256').update(JSON.stringify(context.files?.map((f) => f.spans) || [])).digest('hex').slice(0, 16);
     const relatedTestsFp = crypto.createHash('sha256').update(JSON.stringify(context.relatedTests || [])).digest('hex').slice(0, 16);
-    const questionsFp = crypto.createHash('sha256').update(JSON.stringify(questions.map((q) => ({ id: q.id, prompt: q.prompt, type: q.type })))).digest('hex').slice(0, 16);
+    const questionsFp = crypto.createHash('sha256').update(JSON.stringify(questions)).digest('hex').slice(0, 16);
     const contextFp = `${surroundingFp}:${relatedTestsFp}`;
 
     const cacheKey = cache.computeKey(rawDiffText, taskKey, modelKey, questions.map((q) => q.id), {
@@ -483,22 +502,23 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     let cacheHit = false;
 
     if (isCleanChangeset) {
+      const taskPenalty = hasTask && !options.verifyMode;
       semanticDecisions = [
         {
           id: 'task_completed',
-          probability: hasTask ? 0.0 : 1.0,
+          probability: taskPenalty ? 0.0 : 1.0,
           confidence: 1.0,
           provider: provider.name,
-          rationale: hasTask
+          rationale: taskPenalty
             ? 'Clean changeset with zero modifications while a specific task was declared'
             : 'Clean changeset with zero modifications',
         },
         {
           id: 'task_scope_match',
-          probability: hasTask ? 0.0 : 1.0,
+          probability: taskPenalty ? 0.0 : 1.0,
           confidence: 1.0,
           provider: provider.name,
-          rationale: hasTask
+          rationale: taskPenalty
             ? 'Clean changeset with zero modifications while a specific task was declared'
             : 'Clean changeset with zero modifications',
         },
@@ -762,6 +782,8 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       offline: options.offline,
       noCache: options.noCache,
       strict: options.strict,
+      verifyMode: true,
+      allowCustomProvider: options.allowCustomProvider,
     });
 
     // 3. Resolve previous findings against fresh findings
@@ -789,7 +811,6 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       const storedIds = new Set(allStored.map((f) => f.id));
       newFindings = report.findings.filter((f) => {
         if (targetedSet.has(f.id)) return false;
-        if (f.ruleId === 'task_completed') return false;
         if (storedIds.has(f.id)) return false;
         return true;
       });
@@ -806,18 +827,17 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
           ? `All ${report.resolved.length} targeted finding(s) successfully resolved (target-only). Gate status: PASS.`
           : `Verification incomplete: ${report.remaining.length} targeted finding(s) remain unresolved. Gate status: BLOCK.`;
       } else {
-        const hasBlockingNewFindings = newFindings.some(
-          (f) => f.severity === 'CRITICAL' || f.status === 'block' || (options.strict && f.status === 'review')
-        );
-
         if (!targetsResolved) {
           report.status = 'BLOCK';
           report.allResolved = false;
           report.verdictSummary = `Verification failed: ${report.remaining.length} targeted finding(s) remain unresolved. Gate status: BLOCK.`;
-        } else if (hasBlockingNewFindings) {
-          report.status = 'BLOCK';
+        } else if (freshCheck.exitCode !== 0) {
+          report.status = freshCheck.status;
           report.allResolved = false;
-          report.verdictSummary = `Targeted finding(s) [${report.resolved.join(', ')}] resolved, but ${newFindings.length} new blocking violation(s) detected [${newFindings.map((f) => f.ruleId).join(', ')}]. Gate status: BLOCK.`;
+          const blockingSummary = newFindings.length > 0
+            ? `${newFindings.length} new blocking violation(s) detected [${newFindings.map((f) => f.ruleId).join(', ')}]`
+            : `repository check failed gate criteria with status ${freshCheck.status}`;
+          report.verdictSummary = `Targeted finding(s) [${report.resolved.join(', ')}] resolved, but ${blockingSummary}. Gate status: ${freshCheck.status}.`;
         } else {
           report.status = 'PASS';
           report.allResolved = true;
@@ -829,8 +849,17 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     } else {
       targetsResolved = report.remaining.length === 0;
       report.targetsResolved = targetsResolved;
-      report.allResolved = targetsResolved;
       report.newFindings = [];
+      if (options.targetOnly) {
+        report.status = targetsResolved ? 'PASS' : 'BLOCK';
+        report.allResolved = targetsResolved;
+      } else {
+        report.status = (targetsResolved && freshCheck.exitCode === 0) ? 'PASS' : (targetsResolved ? freshCheck.status : 'BLOCK');
+        report.allResolved = targetsResolved && freshCheck.exitCode === 0;
+      }
+      report.verdictSummary = report.status === 'PASS'
+        ? `All findings verified and resolved. Gate status: PASS.`
+        : `Verification incomplete or gate blocked with status ${report.status}.`;
     }
 
     // Persist resolution state back to repository finding store

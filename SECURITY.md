@@ -56,6 +56,11 @@ GitGuard operates as a repository-aware verification engine that interacts with 
 4. **Prompt Injection & Adversarial Diff Mitigation**:
    - Code diffs and commit messages could contain adversarial text attempting to trick AI evaluators. GitGuard structures evaluation questions with strict schemas (`noul`, `choice`, `score`) and typed criteria, rather than free-form unconstrained prompts, minimizing prompt injection attack surface.
 
+5. **Trust Boundary & Secret Exfiltration Defense**:
+   - Untrusted repository configuration (`.gitguard.yml`) is strictly prohibited from overriding `system_one.baseUrl` to third-party endpoints. This prevents malicious repositories from exfiltrating developer or CI `TYPESAFE_API_KEY` credentials to unauthorized servers. Custom provider URLs are only permitted when explicitly overridden via environment variables or validated system flags.
+   - Cache directory paths (`gate.cache.directory`) are verified with path traversal protections to prevent writes outside repository boundaries.
+   - Finding store files and caches utilize cross-process atomic file locking (`O_CREAT | O_EXCL`) to guarantee state integrity under concurrent multi-agent environments.
+
 ---
 
 ## 2. Supported Versions

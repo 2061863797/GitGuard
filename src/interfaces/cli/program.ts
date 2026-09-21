@@ -99,6 +99,7 @@ export function createCliProgram(): Command {
     .option('--format <format>', 'Output format (text, json)', 'text')
     .option('--json', 'Output results as formatted JSON')
     .option('--offline', 'Force local offline/mock semantic provider')
+    .option('--target-only', 'Verify resolution of targeted findings only, ignoring other repository blockers')
     .option('--cwd <path>', 'Repository working directory path')
     .action(async (options) => {
       const outcome = await verifyCommand(options);

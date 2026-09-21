@@ -13,7 +13,7 @@ import type {
   ProviderMetadata,
   SemanticRunReport,
 } from '../../types/provider.js';
-import { ProviderError, SecurityViolationError } from '../../types/errors.js';
+import { ProviderError, SecurityViolationError, ConfigurationError } from '../../types/errors.js';
 import { DeterministicMockProvider } from './mock-provider.js';
 
 /**
@@ -134,8 +134,11 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
           `Insecure HTTP baseUrl is forbidden for remote host '${host}'. TypeSafe API credentials and code context require HTTPS.`
         );
       }
-    } catch (err) {
+    } catch (err: any) {
       if (err instanceof SecurityViolationError) throw err;
+      throw new ConfigurationError(
+        `Invalid TypeSafe baseUrl provided: "${this.baseUrl}". Must be a valid absolute URL (e.g. https://api.typesafe.ai/v1).`
+      );
     }
 
     // Use official recommended alias 'jev-latest' as default model
@@ -361,7 +364,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'GitGuard/0.2.3',
+            'User-Agent': 'GitGuard/0.2.4',
           },
           body: JSON.stringify(payload),
           signal: controller.signal,

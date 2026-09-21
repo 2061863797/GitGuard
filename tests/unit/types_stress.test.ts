@@ -101,7 +101,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
   describe('1. Version and Export Soundness', () => {
     it('should export GITGUARD_VERSION matching semver format', () => {
       expect(GITGUARD_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
-      expect(GITGUARD_VERSION).toBe('0.2.3');
+      expect(GITGUARD_VERSION).toBe('0.2.4');
     });
   });
 

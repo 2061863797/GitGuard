@@ -79,15 +79,47 @@ rules:
     await fixture.writeFile('dirA/aws.ts', 'export const key = "clean_value";\n');
     await fixture.stage('dirA/aws.ts');
 
-    // 3. Verify targeted finding ID
+    // 3. Verify targeted finding ID with --target-only
     const verifyRes = await runCli(
-      ['verify', '--findings', secretFinding.id, '--scope', 'staged', '--offline', '--json'],
+      ['verify', '--findings', secretFinding.id, '--target-only', '--scope', 'staged', '--offline', '--json'],
       { cwd: fixture.repoPath }
     );
     expect(verifyRes.exitCode).toBe(0);
     const verifyJson = verifyRes.json();
     expect(verifyJson.status).toBe('PASS');
     expect(verifyJson.resolved).toContain(secretFinding.id);
+  });
+
+  it('T4-SCEN-E4: Targeted verify without --target-only fails if other blocking findings exist', async () => {
+    // 1. Introduce 2 findings
+    await fixture.writeFile('dirA/aws.ts', 'export const key = "AKIAIOSFODNN7EXAMPLE";\n');
+    await fixture.writeFile('dirB/fileB.ts', 'console.log("b");\n');
+    await fixture.writeFile('dirC/fileC.ts', 'console.log("c");\n');
+    await fixture.stage();
+
+    const checkRes = await runCli(['check', '--staged', '--offline', '--json'], {
+      cwd: fixture.repoPath,
+    });
+    const checkJson = checkRes.json();
+    const secretFinding = checkJson.findings.find((f: any) =>
+      f.id.includes('secret_scan')
+    );
+    expect(secretFinding).toBeDefined();
+
+    // 2. Fix only the secret
+    await fixture.writeFile('dirA/aws.ts', 'export const key = "clean_value";\n');
+    await fixture.stage('dirA/aws.ts');
+
+    // 3. Default verify without --target-only must fail because unrelated_changes is still BLOCK
+    const verifyRes = await runCli(
+      ['verify', '--findings', secretFinding.id, '--scope', 'staged', '--offline', '--json'],
+      { cwd: fixture.repoPath }
+    );
+    expect(verifyRes.exitCode).toBe(1);
+    const verifyJson = verifyRes.json();
+    expect(verifyJson.status).toBe('BLOCK');
+    expect(verifyJson.targetsResolved).toBe(true);
+    expect(verifyJson.allResolved).toBe(false);
   });
 
   it('T4-SCEN-E3: Global verification confirms remaining finding until all resolved', async () => {

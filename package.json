@@ -1,6 +1,6 @@
 {
   "name": "gitguard",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Repository-aware change verification and quality gate system in TypeScript",
   "type": "module",
   "main": "./dist/index.js",
@@ -36,6 +36,7 @@
     "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run tests/e2e",
     "test:coverage": "vitest run --coverage",
+    "test:pack": "node scripts/test-pack.mjs",
     "gitguard": "tsx bin/gitguard.ts"
   },
   "dependencies": {
