@@ -20,7 +20,9 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { GitGuardMcpServer, logDiagnostic } from '../../../src/interfaces/mcp/server.js';
 import { GITGUARD_MCP_TOOLS, executeMcpTool } from '../../../src/interfaces/mcp/tools.js';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
+import { DeterministicMockProvider } from '../../../src/analysis/semantic/mock-provider.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
+import { FileFindingStore } from '../../../src/findings/store.js';
 
 describe('Empirical Challenger M4-2: MCP Server Stress Suite', () => {
   let fixture: GitFixture;
@@ -34,7 +36,11 @@ describe('Empirical Challenger M4-2: MCP Server Stress Suite', () => {
     await fixture.stage();
     await fixture.commit('feat: initial commit for mcp stress');
 
-    engine = new DefaultGitGuardEngine();
+    const mockProvider = new DeterministicMockProvider();
+    engine = new DefaultGitGuardEngine({
+      mockProvider,
+      typesafeProvider: mockProvider,
+    });
     mcpServer = new GitGuardMcpServer({ engine });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -378,6 +384,52 @@ describe('Empirical Challenger M4-2: MCP Server Stress Suite', () => {
       });
 
       it('should support string comma-separated findingIds coercion and findings alias in verify_findings', async () => {
+        const store = new FileFindingStore(fixture.path);
+        await store.save([
+          {
+            id: 'GG-TEST-001',
+            ruleId: 'secret_scan',
+            source: 'deterministic',
+            status: 'block',
+            severity: 'CRITICAL',
+            lifecycle: 'active',
+            affectedFiles: [],
+            message: 'Test 1',
+            evidence: [],
+            expectedEvidence: [],
+            fingerprint: 'fp_1',
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: 'GG-TEST-002',
+            ruleId: 'secret_scan',
+            source: 'deterministic',
+            status: 'block',
+            severity: 'CRITICAL',
+            lifecycle: 'active',
+            affectedFiles: [],
+            message: 'Test 2',
+            evidence: [],
+            expectedEvidence: [],
+            fingerprint: 'fp_2',
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: 'GG-ALIAS-001',
+            ruleId: 'secret_scan',
+            source: 'deterministic',
+            status: 'block',
+            severity: 'CRITICAL',
+            lifecycle: 'active',
+            affectedFiles: [],
+            message: 'Alias 1',
+            evidence: [],
+            expectedEvidence: [],
+            fingerprint: 'fp_alias',
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+
         // String coercion: "GG-001, GG-002"
         const res1 = (await client.callTool({
           name: 'verify_findings',
@@ -619,6 +671,41 @@ describe('Empirical Challenger M4-2: MCP Server Stress Suite', () => {
   // =========================================================================
   describe('4. Concurrency & Lifecycle Stress', () => {
     it('should handle high-concurrency tool requests simultaneously without crosstalk or deadlock', async () => {
+      await fixture.writeFile(
+        '.gitguard.yml',
+        [
+          'version: 1',
+          'deterministic:',
+          '  test:',
+          '    enabled: false',
+          '  lint:',
+          '    enabled: false',
+          '  typecheck:',
+          '    enabled: false',
+        ].join('\n')
+      );
+      await fixture.writeFile(
+        'src/sample.ts',
+        'export const value = 42; // Concurrent verification task #0 #1 #2 #3 #4\n'
+      );
+      const store = new FileFindingStore(fixture.path);
+      await store.save(
+        Array.from({ length: 5 }).map((_, i) => ({
+          id: `FINDING-CONCUR-${i}`,
+          ruleId: 'secret_scan',
+          source: 'deterministic',
+          status: 'block' as const,
+          severity: 'CRITICAL' as const,
+          lifecycle: 'active' as const,
+          affectedFiles: ['src/sample.ts'],
+          message: `Concurrent finding ${i}`,
+          evidence: [],
+          expectedEvidence: [],
+          fingerprint: `fp_concur_${i}`,
+          createdAt: new Date().toISOString(),
+        }))
+      );
+
       // Fire 20 concurrent requests across all 4 tool types
       const tasks = [
         // 5 inspect_changes

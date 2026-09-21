@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { safeReadRepoFile } from '../context/fs.js';
 
 import type {
   GitAdapter,
@@ -543,13 +544,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
         return null;
       }
     } else {
-      const fullPath = path.resolve(root, relativePath);
-      try {
-        const content = await fs.readFile(fullPath, 'utf-8');
-        return content;
-      } catch {
-        return null;
-      }
+      return safeReadRepoFile(root, relativePath);
     }
   }
 

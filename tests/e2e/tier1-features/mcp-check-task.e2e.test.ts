@@ -53,7 +53,7 @@ describe('Tier 1: MCP check_task_completion tool', () => {
     expect(text).toContain("Missing required parameter 'task'");
   });
 
-  it('T1-MCP-TSK-03: Clean repo returns PASS with 1.0 task completion probability', async () => {
+  it('T1-MCP-TSK-03: Clean repo returns BLOCK with 0.0 task completion probability when task is specified', async () => {
     const res = await session.client.callTool({
       name: 'check_task_completion',
       arguments: { cwd: fixture.repoPath, task: 'Verify baseline' },
@@ -61,11 +61,12 @@ describe('Tier 1: MCP check_task_completion tool', () => {
 
     expect(res.isError).toBeFalsy();
     const data = JSON.parse((res.content as any)[0].text);
-    expect(data.verdict).toBe('PASS');
-    expect(data.taskCompleted).toBe(1.0);
+    expect(data.verdict).toBe('BLOCK');
+    expect(data.taskCompleted).toBe(0.0);
   });
 
   it('T1-MCP-TSK-04: Accepts repoPath parameter interchangeably with cwd', async () => {
+    await fixture.writeFile('src/repoPath.ts', 'export const repoPath = true;\n');
     const res = await session.client.callTool({
       name: 'check_task_completion',
       arguments: { repoPath: fixture.repoPath, task: 'Test repoPath alias' },

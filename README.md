@@ -19,7 +19,7 @@ Unlike conversational LLMs that produce verbose, unstructured code review opinio
 
 - 🎯 **Task Fulfillment (`task_completed`)**: Calibrates whether the diff genuinely accomplishes the declared goal or merely wrote superficial, hallucinated code.
 - 🛡️ **Scope Creep & Boundary Drift (`unrelated_changes`)**: Mathematically detects modifications that deviate from the user's intent or touch files outside the task scope.
-- 🧪 **Test Adequacy Guarantee (`tests_required`)**: Programmatically assesses whether new logic or edge paths demand corresponding unit or integration tests.
+- 🧪 **Test Requirement Assessment (`tests_required`)**: Programmatically assesses whether new logic or edge paths demand corresponding unit or integration tests.
 - 🔒 **Security Sensitivity Assessment (`security_sensitive`)**: Evaluates whether auth flows, cryptographic primitives, or credential paths have been altered.
 - ⚠️ **Regression Risk Forecasting (`regression_risk`)**: Quantifies blast radius and categorizes regression likelihood into discrete risk levels (`low`, `medium`, `high`, `critical`).
 - ⚡ **Zero-Dependency Offline Fallback**: Features an embedded deterministic heuristic mock provider, ensuring continuous local & CI enforcement without external API keys.

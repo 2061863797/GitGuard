@@ -11,9 +11,9 @@ import * as path from 'node:path';
 import type { Finding, FindingFilter } from '../types/finding.js';
 
 /**
- * Finds nearest ancestor directory containing a .git folder.
+ * Finds nearest ancestor directory containing a .git directory or file.
  */
-function findNearestGitRoot(startDir: string): string {
+export function findNearestGitRoot(startDir: string): string {
   let current = path.resolve(startDir);
   while (true) {
     if (fsSync.existsSync(path.join(current, '.git'))) {
@@ -25,6 +25,32 @@ function findNearestGitRoot(startDir: string): string {
     }
     current = parent;
   }
+}
+
+/**
+ * Resolves the actual git storage directory, supporting worktrees and submodules where .git is a pointer file.
+ */
+export function resolveGitDir(repoRoot: string): string {
+  const gitPath = path.join(repoRoot, '.git');
+  try {
+    const stat = fsSync.statSync(gitPath);
+    if (stat.isDirectory()) {
+      return gitPath;
+    }
+    if (stat.isFile()) {
+      const content = fsSync.readFileSync(gitPath, 'utf8');
+      const match = content.match(/^gitdir:\s*(.+)$/m);
+      if (match) {
+        const rawTarget = match[1].trim();
+        return path.isAbsolute(rawTarget)
+          ? rawTarget
+          : path.resolve(repoRoot, rawTarget);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return gitPath;
 }
 
 /**
@@ -115,7 +141,8 @@ export class FileFindingStore implements FindingStore {
 
   constructor(repoRoot: string = process.cwd()) {
     const resolvedRoot = findNearestGitRoot(repoRoot);
-    this.storePath = path.join(resolvedRoot, '.git', 'gitguard', 'findings.json');
+    const gitDir = resolveGitDir(resolvedRoot);
+    this.storePath = path.join(gitDir, 'gitguard', 'findings.json');
     this.memoryFallback = new MemoryFindingStore();
   }
 

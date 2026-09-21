@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { runCli, setupGitGuardRepo, createTempGitRepo, type GitFixture } from '../helpers/e2e-harness.js';
+import { FileFindingStore } from '../../../src/findings/store.js';
 
 describe('Tier 1: CLI verify subcommand', () => {
   let fixture: GitFixture;
@@ -12,19 +13,50 @@ describe('Tier 1: CLI verify subcommand', () => {
   beforeEach(async () => {
     fixture = await createTempGitRepo('e2e-cli-vrf-');
     await setupGitGuardRepo(fixture);
+    const store = new FileFindingStore(fixture.repoPath);
+    await store.save([
+      {
+        id: 'GG-001',
+        ruleId: 'secret_scan',
+        source: 'deterministic',
+        status: 'block',
+        severity: 'CRITICAL',
+        lifecycle: 'active',
+        affectedFiles: [],
+        message: 'Mock finding 001',
+        evidence: [],
+        expectedEvidence: [],
+        fingerprint: 'fp_001',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'GG-002',
+        ruleId: 'secret_scan',
+        source: 'deterministic',
+        status: 'block',
+        severity: 'CRITICAL',
+        lifecycle: 'active',
+        affectedFiles: [],
+        message: 'Mock finding 002',
+        evidence: [],
+        expectedEvidence: [],
+        fingerprint: 'fp_002',
+        createdAt: new Date().toISOString(),
+      },
+    ]);
   });
 
   afterEach(async () => {
     await fixture.cleanup();
   });
 
-  it('T1-CLI-VRF-01: Clean repo with dummy finding ID yields PASS and exit code 0', async () => {
+  it('T1-CLI-VRF-01: Non-existent finding ID yields BLOCK and non-zero exit code', async () => {
     const outcome = await runCli(
       ['verify', '--findings', 'GG-NONEXISTENT', '--offline'],
       { cwd: fixture.repoPath }
     );
-    expect(outcome.exitCode).toBe(0);
-    expect(outcome.stdout).toContain('GitGuard Verification Loop: PASS');
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stdout).toContain('Verification failed: None of the targeted finding ID(s) exist');
   });
 
   it('T1-CLI-VRF-02: Targeted finding resolved with --json report', async () => {

@@ -465,17 +465,21 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       semanticDecisions = [
         {
           id: 'task_completed',
-          probability: 1.0,
+          probability: hasTask ? 0.0 : 1.0,
           confidence: 1.0,
           provider: provider.name,
-          rationale: 'Clean changeset with zero modifications',
+          rationale: hasTask
+            ? 'Clean changeset with zero modifications while a specific task was declared'
+            : 'Clean changeset with zero modifications',
         },
         {
           id: 'task_scope_match',
-          probability: 1.0,
+          probability: hasTask ? 0.0 : 1.0,
           confidence: 1.0,
           provider: provider.name,
-          rationale: 'Clean changeset with zero modifications',
+          rationale: hasTask
+            ? 'Clean changeset with zero modifications while a specific task was declared'
+            : 'Clean changeset with zero modifications',
         },
         {
           id: 'unrelated_changes',
@@ -661,6 +665,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     // 2. Retrieve previous findings to evaluate
     let previousFindings: Finding[] = [];
     let storedMap: Map<string, Finding> | undefined;
+    const unknownFindings: string[] = [];
 
     if (options.findingIds && options.findingIds.length > 0) {
       let allStored: Finding[] = [];
@@ -685,29 +690,27 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         if (stored) {
           previousFindings.push(stored);
         } else {
-          // Synthetic finding placeholder with stable fingerprint
-          let extractedRule = id;
-          let extractedHash = '';
-          const match = id.match(/^finding_(.+)_([0-9a-fA-F]{8})$/);
-          if (match) {
-            extractedRule = match[1];
-            extractedHash = match[2];
-          }
-          previousFindings.push({
-            id,
-            ruleId: extractedRule,
-            source: extractedRule.startsWith('deterministic') ? 'deterministic' : 'semantic',
-            status: 'block',
-            severity: 'CRITICAL',
-            lifecycle: 'active',
-            affectedFiles: [],
-            message: `Target finding ${id}`,
-            evidence: [],
-            expectedEvidence: [],
-            fingerprint: extractedHash || `fp_${id}`,
-            createdAt: new Date().toISOString(),
-          });
+          unknownFindings.push(id);
         }
+      }
+
+      // If all targeted finding IDs do not exist, fail immediately with BLOCK
+      if (unknownFindings.length > 0 && previousFindings.length === 0) {
+        return {
+          status: 'BLOCK',
+          verdictSummary: `Verification failed: None of the targeted finding ID(s) exist in repository store or history: [${unknownFindings.join(', ')}].`,
+          task: freshCheck.task,
+          diffSummary: freshCheck.diffSummary,
+          findings: [],
+          resolved: [],
+          remaining: [],
+          unknownFindings,
+          resolvedFindings: [],
+          remainingFindings: [],
+          deterministicResults: freshCheck.deterministicResults,
+          semanticDecisions: freshCheck.semanticDecisions,
+          metadata: freshCheck.metadata,
+        };
       }
     } else {
       let activeStored: Finding[] = [];
@@ -739,10 +742,16 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       report.remaining = report.remaining.filter((id) => targetedSet.has(id));
       report.remainingFindings = report.remaining;
       report.findings = report.findings.filter((f) => targetedSet.has(f.id));
-      if (report.remaining.length === 0) {
+      if (unknownFindings.length === 0 && report.remaining.length === 0) {
         report.status = 'PASS';
         report.verdictSummary = `All ${report.resolved.length} targeted finding(s) successfully resolved. Gate status: PASS.`;
       }
+    }
+
+    if (unknownFindings.length > 0) {
+      report.unknownFindings = unknownFindings;
+      report.status = 'BLOCK';
+      report.verdictSummary = `Verification failed: ${unknownFindings.length} targeted finding(s) not found in repository store or history: [${unknownFindings.join(', ')}].`;
     }
 
     // Persist resolution state back to repository finding store

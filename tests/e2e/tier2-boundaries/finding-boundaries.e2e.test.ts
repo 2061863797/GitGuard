@@ -40,13 +40,13 @@ describe('Tier 2: Finding Manager Boundaries', () => {
     expect(fp1).toBe(fp2);
   });
 
-  it('T2-FND-02: Query non-existent finding ID yields clean PASS', async () => {
+  it('T2-FND-02: Query non-existent finding ID yields BLOCK and non-zero exit', async () => {
     const outcome = await runCli(
       ['verify', '--findings', 'GG-NONEXISTENT-999', '--offline'],
       { cwd: fixture.repoPath }
     );
-    expect(outcome.exitCode).toBe(0);
-    expect(outcome.stdout).toContain('GitGuard Verification Loop: PASS');
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.stdout).toContain('Verification failed: None of the targeted finding ID(s) exist');
   });
 
   it('T2-FND-03: Findings filter with zero matches emits empty JSON array', async () => {

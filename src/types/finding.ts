@@ -149,6 +149,8 @@ export interface VerificationReport {
   resolved: string[];
   /** IDs of findings still active in this verification loop */
   remaining: string[];
+  /** IDs of requested findings that were not found in store/history */
+  unknownFindings?: string[];
   /** Alias for resolved finding IDs (backwards compatibility) */
   resolvedFindings?: string[];
   /** Alias for remaining active finding IDs (backwards compatibility) */

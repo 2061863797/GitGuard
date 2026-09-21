@@ -10,6 +10,7 @@ import { GitGuardMcpServer, logDiagnostic } from '../../../src/interfaces/mcp/se
 import { GITGUARD_MCP_TOOLS, executeMcpTool } from '../../../src/interfaces/mcp/tools.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
+import { FileFindingStore } from '../../../src/findings/store.js';
 
 describe('GitGuard MCP Server & Tools', () => {
   let fixture: GitFixture;
@@ -89,10 +90,11 @@ describe('GitGuard MCP Server & Tools', () => {
     });
 
     it('should execute check_task_completion tool successfully over MCP', async () => {
+      await fixture.writeFile('src/feature.ts', 'export const ready = true;\n');
       const response = (await client.callTool({
         name: 'check_task_completion',
         arguments: {
-          task: 'Ensure clean baseline repository',
+          task: 'Implement ready feature flag',
           cwd: fixture.path,
         },
       })) as any;
@@ -133,6 +135,24 @@ describe('GitGuard MCP Server & Tools', () => {
     });
 
     it('should execute verify_findings tool successfully', async () => {
+      const store = new FileFindingStore(fixture.path);
+      await store.save([
+        {
+          id: 'GG-PREV-001',
+          ruleId: 'secret_scan',
+          source: 'deterministic',
+          status: 'block',
+          severity: 'CRITICAL',
+          lifecycle: 'active',
+          affectedFiles: [],
+          message: 'Previous finding resolved',
+          evidence: [],
+          expectedEvidence: [],
+          fingerprint: 'fp_prev_001',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
       const response = (await client.callTool({
         name: 'verify_findings',
         arguments: {

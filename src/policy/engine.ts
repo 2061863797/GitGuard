@@ -67,11 +67,17 @@ export class DefaultPolicyEngine implements PolicyEngine {
     const hasTask = Boolean(context.task?.task && context.task.task.trim().length > 0);
     const changedFiles = (context.diff?.files || []).map((f) => f.newPath || f.oldPath || '');
     const hasDeterministicFailures = (deterministicResults || []).some((r) => r.status === 'failed');
+    const taskFailedOnCleanChangeset =
+      hasTask &&
+      (semanticDecisions || []).some(
+        (d) => d.id === 'task_completed' && d.probability !== undefined && d.probability < 0.2
+      );
     const isDiffEmpty =
       (!context.diff || (!context.diff.raw?.trim() && changedFiles.length === 0)) &&
-      !hasDeterministicFailures;
+      !hasDeterministicFailures &&
+      !taskFailedOnCleanChangeset;
 
-    // Short-circuit on completely empty repository changeset
+    // Short-circuit on completely empty repository changeset when no failures were detected
     if (isDiffEmpty) {
       return {
         verdict: 'PASS',
@@ -123,17 +129,42 @@ export class DefaultPolicyEngine implements PolicyEngine {
         }
       }
 
-      // Check tests_required composite logic: if tests are present in changeset, rule passes
+      // Check tests_required composite logic: if tests are present in changeset and relevant to changes, rule passes
       if (ruleId === 'tests_required') {
         const testsPresentDecision = decisionMap.get('tests_present');
-        const hasTestFilesInDiff = (context.diff?.files || []).some(
-          (f) =>
-            (f.newPath && (f.newPath.includes('.test.') || f.newPath.includes('.spec.') || f.newPath.startsWith('tests/') || f.newPath.startsWith('__tests__/'))) ||
-            (f.oldPath && (f.oldPath.includes('.test.') || f.oldPath.includes('.spec.') || f.oldPath.startsWith('tests/') || f.oldPath.startsWith('__tests__/')))
-        );
+        const diffFiles = context.diff?.files || [];
+        const isTestFile = (p?: string) =>
+          Boolean(p && (p.includes('.test.') || p.includes('.spec.') || p.startsWith('tests/') || p.startsWith('__tests__/')));
+
+        const testFilesChanged = diffFiles.filter((f) => isTestFile(f.newPath) || isTestFile(f.oldPath));
+        const nonTestFilesChanged = diffFiles.filter((f) => !isTestFile(f.newPath) && !isTestFile(f.oldPath));
+
+        let testsAreRelevant = testFilesChanged.length > 0;
+        if (testsAreRelevant && nonTestFilesChanged.length > 0) {
+          const nonTestNames = new Set(
+            nonTestFilesChanged.map((f) => {
+              const full = f.newPath || f.oldPath || '';
+              const base = full.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+              return base.toLowerCase();
+            })
+          );
+          const relatedTestPaths = new Set(
+            (context.relatedTests || []).map((t) => t.testPath.toLowerCase())
+          );
+          const hasMatchingTest = testFilesChanged.some((f) => {
+            const pathLower = (f.newPath || f.oldPath || '').toLowerCase();
+            if (relatedTestPaths.has(pathLower)) return true;
+            const base = pathLower.split('/').pop()?.replace(/(\.test|\.spec)\.[^.]+$/, '') || '';
+            return nonTestNames.has(base);
+          });
+          if (!hasMatchingTest && (testsPresentDecision?.probability ?? 0) < 0.6) {
+            testsAreRelevant = false;
+          }
+        }
+
         const testsArePresent =
           (testsPresentDecision && (testsPresentDecision.probability ?? 0) >= 0.6) ||
-          hasTestFilesInDiff;
+          testsAreRelevant;
 
         if (testsArePresent) {
           passedRulesSet.add(ruleId);

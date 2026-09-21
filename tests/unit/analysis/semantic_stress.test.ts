@@ -760,8 +760,8 @@ describe('Empirical Challenger M2-2: Semantic Stress Suite', () => {
       expect(capturedHeaders['Authorization']).toBe('Bearer ts_secret_token_abc');
       expect(capturedPayload.model).toBe('jev-2');
 
-      // Verify diff was clamped to 15,000 chars
-      expect(capturedPayload.state.diff.length).toBe(15000);
+      // Verify diff preserves full budgeted diff without arbitrary 15k clamp
+      expect(capturedPayload.state.diff.length).toBe(25000);
 
       // Verify instruction content was clamped to 2,000 chars
       expect(capturedPayload.state.instructions[0].content.length).toBe(2000);

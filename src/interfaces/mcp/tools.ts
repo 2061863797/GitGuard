@@ -225,7 +225,7 @@ export async function executeMcpTool(
           cwd,
         });
 
-        const canCommit = result.status === 'PASS' || result.status === 'WARN';
+        const canCommit = result.exitCode === 0;
         const deterministicMap: Record<string, string> = {};
         for (const det of result.deterministicResults || []) {
           deterministicMap[det.id] = det.status;

@@ -1,6 +1,6 @@
 {
   "name": "gitguard",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Repository-aware change verification and quality gate system in TypeScript",
   "type": "module",
   "main": "./dist/index.js",
@@ -29,6 +29,7 @@
     "clean": "rimraf dist",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "prepack": "pnpm run build",
     "pretest": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",

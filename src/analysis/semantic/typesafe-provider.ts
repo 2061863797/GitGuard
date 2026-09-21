@@ -13,7 +13,7 @@ import type {
   ProviderMetadata,
   SemanticRunReport,
 } from '../../types/provider.js';
-import { ProviderError } from '../../types/errors.js';
+import { ProviderError, SecurityViolationError } from '../../types/errors.js';
 import { DeterministicMockProvider } from './mock-provider.js';
 
 /**
@@ -121,6 +121,21 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
       options?.baseUrl ||
       process.env.TYPESAFE_BASE_URL ||
       'https://api.typesafe.ai/v1';
+
+    if (this.baseUrl.startsWith('http://')) {
+      try {
+        const url = new URL(this.baseUrl);
+        const host = url.hostname.toLowerCase();
+        if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+          throw new SecurityViolationError(
+            `Insecure HTTP baseUrl is forbidden for remote host '${host}'. TypeSafe API credentials and code context require HTTPS.`
+          );
+        }
+      } catch (err) {
+        if (err instanceof SecurityViolationError) throw err;
+      }
+    }
+
     // Use official recommended alias 'jev-latest' as default model
     this.model = options?.model || 'jev-latest';
     this.timeoutMs = options?.timeoutMs ?? 15000;
@@ -301,9 +316,22 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
           additions: f.additions,
           deletions: f.deletions,
         })),
-        diff: context.diff?.raw ? context.diff.raw.slice(0, 15000) : '',
+        diff: context.diff?.raw || '',
         insertions: context.diff?.insertions ?? 0,
-        deletions: context.diff?.deletions ?? 0,
+        surroundingCode: (context.files || []).flatMap((f) =>
+          (f.spans || []).map((s) => ({
+            path: f.path,
+            startLine: s.startLine,
+            endLine: s.endLine,
+            code: s.code,
+          }))
+        ),
+        relatedTests: (context.relatedTests || []).map((t) => ({
+          testPath: t.testPath,
+          relatedSourcePath: t.relatedSourcePath,
+          modifiedInDiff: t.modifiedInDiff,
+          contentSnippet: t.contentSnippet ? t.contentSnippet.slice(0, 2000) : '',
+        })),
         instructions: (context.instructions || []).map((i) => ({
           sourcePath: i.sourcePath,
           scope: i.scope,
@@ -331,7 +359,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'GitGuard/0.2.1',
+            'User-Agent': 'GitGuard/0.2.2',
           },
           body: JSON.stringify(payload),
           signal: controller.signal,
@@ -384,20 +412,14 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
 
         // Support official answers map schema
         if (data.answers && typeof data.answers === 'object') {
-          const decisions: SemanticDecision[] = questions.map((q) => {
-            const ans = data.answers![q.id];
-            if (!ans) {
-              return {
-                id: q.id,
-                probability: q.type === 'boolean' ? 0.5 : undefined,
-                score: q.type === 'score' ? 0.5 : undefined,
-                value: q.type === 'choice' ? 'unknown' : undefined,
-                confidence: 0.5,
-                provider: this.name,
-                rationale: 'Question omitted in System One answer map; defaulted',
-              };
+          for (const q of questions) {
+            if (!data.answers[q.id]) {
+              throw new Error(`System One response missing answer for required question: ${q.id}`);
             }
+          }
 
+          const decisions: SemanticDecision[] = questions.map((q) => {
+            const ans = data.answers![q.id]!;
             const prob = ans.noul ?? ans.probability;
             let val = ans.choice ?? ans.value;
             let score = ans.score;
@@ -413,7 +435,8 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
               }
             }
 
-            const conf = ans.confidence ?? 0.9;
+            // In System One, noul represents calibrated probability; confidence is optional/undefined
+            const conf = ans.confidence !== undefined ? ans.confidence : (q.type === 'boolean' ? undefined : 0.9);
 
             return {
               id: q.id,

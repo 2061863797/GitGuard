@@ -9,6 +9,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { SemanticDecision } from '../types/provider.js';
+import { findNearestGitRoot, resolveGitDir } from '../findings/store.js';
 
 export interface SemanticCacheEntry {
   cacheKey: string;
@@ -23,38 +24,60 @@ export class SemanticCache {
   private enabled: boolean;
 
   constructor(repoRoot: string = process.cwd(), enabled = true) {
-    this.cacheDir = path.join(repoRoot, '.git', 'gitguard', 'cache');
+    const resolvedRoot = findNearestGitRoot(repoRoot);
+    const gitDir = resolveGitDir(resolvedRoot);
+    this.cacheDir = path.join(gitDir, 'gitguard', 'cache');
     this.enabled = enabled;
   }
 
   /**
-   * Generates a stable SHA-256 cache key based on diff, task, model, and questions.
+   * Generates a stable SHA-256 cache key based on diff, task, model, questions, and extra context.
    */
   public computeKey(
     rawDiff: string,
     task: string,
     model: string,
-    questionIds: string[]
+    questionIds: string[],
+    extraContext?: {
+      instructionsFingerprint?: string;
+      contextFingerprint?: string;
+      questionsFingerprint?: string;
+    }
   ): string {
     const sortedQuestions = [...questionIds].sort().join(',');
-    const content = `diff:${rawDiff}|task:${task}|model:${model}|questions:${sortedQuestions}`;
+    const extra = extraContext
+      ? `|extra:${extraContext.instructionsFingerprint || ''}:${extraContext.contextFingerprint || ''}:${extraContext.questionsFingerprint || ''}`
+      : '';
+    const content = `diff:${rawDiff}|task:${task}|model:${model}|questions:${sortedQuestions}${extra}`;
     return crypto.createHash('sha256').update(content).digest('hex');
   }
 
   /**
-   * Retrieves cached decisions if available and valid.
+   * Retrieves cached decisions if available, valid, and not expired.
    */
-  public async get(key: string): Promise<SemanticDecision[] | null> {
+  public async get(key: string, maxTtlMs?: number): Promise<SemanticDecision[] | null> {
     if (!this.enabled) return null;
 
     try {
       const filePath = path.join(this.cacheDir, `${key}.json`);
       const data = await fs.readFile(filePath, 'utf8');
       const entry = JSON.parse(data) as SemanticCacheEntry;
-      if (entry && Array.isArray(entry.decisions)) {
-        return entry.decisions;
+      if (!entry || !Array.isArray(entry.decisions)) {
+        return null;
       }
-      return null;
+
+      // If model is a dynamic 'latest' alias, enforce TTL (default 24h)
+      const isDynamicModel = entry.model?.includes('latest') ?? false;
+      const effectiveTtlMs = maxTtlMs ?? (isDynamicModel ? 24 * 60 * 60 * 1000 : Infinity);
+
+      if (effectiveTtlMs < Infinity && entry.createdAt) {
+        const ageMs = Date.now() - new Date(entry.createdAt).getTime();
+        if (ageMs > effectiveTtlMs) {
+          return null; // Expired entry
+        }
+      }
+
+      return entry.decisions;
     } catch {
       return null;
     }

@@ -55,7 +55,7 @@ export async function verifyCommand(
       console.log(output);
     }
 
-    const exitCode = report.status === 'PASS' ? 0 : 1;
+    const exitCode = report.status === 'PASS' ? 0 : (report.unknownFindings && report.unknownFindings.length > 0 ? 2 : 1);
     return { exitCode, output, report };
   } catch (err: any) {
     const errorMsg = `Error executing verify: ${err.message || String(err)}`;

@@ -265,20 +265,33 @@ export async function loadConfig(
     }
   }
 
-  // 2. Search default config file names in cwd
-  for (const filename of CONFIG_FILE_NAMES) {
-    const candidate = path.resolve(cwd, filename);
-    if (fs.existsSync(candidate)) {
-      try {
-        const content = await fs.promises.readFile(candidate, 'utf-8');
-        return parseConfig(content);
-      } catch (err: any) {
-        if (err instanceof ConfigurationError) {
-          throw err;
+  // 2. Search default config file names in cwd and recursively up to repository root
+  let currentDir = path.resolve(cwd);
+  while (true) {
+    for (const filename of CONFIG_FILE_NAMES) {
+      const candidate = path.resolve(currentDir, filename);
+      if (fs.existsSync(candidate)) {
+        try {
+          const content = await fs.promises.readFile(candidate, 'utf-8');
+          return parseConfig(content);
+        } catch (err: any) {
+          if (err instanceof ConfigurationError) {
+            throw err;
+          }
+          throw new ConfigurationError(`Failed to read config at ${candidate}: ${err.message}`);
         }
-        throw new ConfigurationError(`Failed to read config at ${candidate}: ${err.message}`);
       }
     }
+
+    // Stop searching upwards if current directory contains a .git folder or pointer file
+    if (fs.existsSync(path.join(currentDir, '.git'))) {
+      break;
+    }
+    const parent = path.dirname(currentDir);
+    if (parent === currentDir) {
+      break;
+    }
+    currentDir = parent;
   }
 
   // 3. Zero-config fallback: return a fresh clone of default configuration

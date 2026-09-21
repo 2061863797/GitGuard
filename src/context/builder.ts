@@ -25,6 +25,7 @@ import type { DiffContext } from '../types/diff.js';
 import { GitCLIAdapter } from '../git/adapter.js';
 import { parseDiff } from '../git/diff-parser.js';
 import { isSensitiveFile, sanitizeEvaluationContext } from './filter.js';
+import { safeReadRepoFile } from './fs.js';
 
 /** Default budget limits */
 const DEFAULT_BUDGET = {
@@ -400,25 +401,20 @@ export class DefaultContextBuilder implements ContextBuilder {
       const normalizedPath = toPosix(relPath);
       if (seenPaths.has(normalizedPath)) return;
 
-      const fullPath = path.resolve(rootPath, relPath);
-      if (await fileExists(fullPath)) {
-        try {
-          const text = await fs.readFile(fullPath, 'utf-8');
-          seenPaths.add(normalizedPath);
-          const remainingChars = maxChars - currentChars;
-          if (remainingChars <= 0) return;
+      const remainingChars = maxChars - currentChars;
+      if (remainingChars <= 0) return;
 
-          const content = text.length > remainingChars ? text.substring(0, remainingChars) : text;
-          currentChars += content.length;
+      const text = await safeReadRepoFile(rootPath, relPath, { maxBytes: remainingChars });
+      if (text !== null) {
+        seenPaths.add(normalizedPath);
+        const content = text.length > remainingChars ? text.substring(0, remainingChars) : text;
+        currentChars += content.length;
 
-          instructions.push({
-            sourcePath: normalizedPath,
-            scope,
-            content,
-          });
-        } catch {
-          // Ignore read errors
-        }
+        instructions.push({
+          sourcePath: normalizedPath,
+          scope,
+          content,
+        });
       }
     };
 

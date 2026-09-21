@@ -17,9 +17,63 @@ import type {
   DeterministicCheckId,
 } from '../../types/provider.js';
 import { SecurityViolationError } from '../../types/errors.js';
-import { scanDiffForSecrets } from './secrets.js';
+import { scanDiffForSecrets, redactSecret, SECRET_PATTERNS } from './secrets.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Strips sensitive API keys, tokens, and credentials from subprocess environment.
+ */
+export function sanitizeSubprocessEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const cleanEnv: NodeJS.ProcessEnv = { ...baseEnv, LC_ALL: 'C' };
+  const sensitiveExactKeys = [
+    'TYPESAFE_API_KEY',
+    'JEV_API_KEY',
+    'GITHUB_TOKEN',
+    'GH_TOKEN',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_SESSION_TOKEN',
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+    'GITGUARD_API_KEY',
+    'NPM_TOKEN',
+    'NODE_AUTH_TOKEN',
+    'SLACK_TOKEN',
+    'STRIPE_KEY',
+  ];
+
+  for (const key of Object.keys(cleanEnv)) {
+    const upper = key.toUpperCase();
+    if (
+      sensitiveExactKeys.includes(key) ||
+      upper.includes('SECRET') ||
+      upper.includes('API_KEY') ||
+      upper.includes('AUTH_TOKEN') ||
+      upper.includes('PRIVATE_KEY') ||
+      upper.includes('PASSWORD')
+    ) {
+      delete cleanEnv[key];
+    }
+  }
+  return cleanEnv;
+}
+
+/**
+ * Redacts secret patterns from command output to prevent log leakage.
+ */
+export function redactOutputSecrets(text: string): string {
+  if (!text) return text;
+  let result = text;
+  for (const pattern of SECRET_PATTERNS) {
+    try {
+      const globalRegex = new RegExp(pattern.regex.source, pattern.regex.flags.includes('g') ? pattern.regex.flags : `${pattern.regex.flags}g`);
+      result = result.replace(globalRegex, (match) => redactSecret(match));
+    } catch {
+      // ignore regex construction errors
+    }
+  }
+  return result;
+}
 
 /**
  * Checks for unquoted dangerous shell metacharacters to prevent command injection
@@ -350,6 +404,8 @@ export class DeterministicRunner implements DeterministicChecker {
         (resolvedPath.toLowerCase().endsWith('.cmd') ||
           resolvedPath.toLowerCase().endsWith('.bat'));
 
+      const safeEnv = sanitizeSubprocessEnv(process.env);
+
       if (isWindowsBatch) {
         const comSpec = process.env.ComSpec || 'cmd.exe';
         const result = await execFileAsync(comSpec, ['/d', '/s', '/c', commandStr], {
@@ -357,26 +413,20 @@ export class DeterministicRunner implements DeterministicChecker {
           timeout: timeoutMs,
           maxBuffer: this.maxBuffer,
           windowsHide: true,
-          env: {
-            ...process.env,
-            LC_ALL: 'C',
-          },
+          env: safeEnv,
         });
-        stdout = result.stdout?.toString() ?? '';
-        stderr = result.stderr?.toString() ?? '';
+        stdout = redactOutputSecrets(result.stdout?.toString() ?? '');
+        stderr = redactOutputSecrets(result.stderr?.toString() ?? '');
       } else {
         const result = await execFileAsync(resolvedPath, args, {
           cwd,
           timeout: timeoutMs,
           maxBuffer: this.maxBuffer,
           windowsHide: true,
-          env: {
-            ...process.env,
-            LC_ALL: 'C',
-          },
+          env: safeEnv,
         });
-        stdout = result.stdout?.toString() ?? '';
-        stderr = result.stderr?.toString() ?? '';
+        stdout = redactOutputSecrets(result.stdout?.toString() ?? '');
+        stderr = redactOutputSecrets(result.stderr?.toString() ?? '');
       }
 
       const durationMs = Date.now() - startTime;
@@ -402,8 +452,10 @@ export class DeterministicRunner implements DeterministicChecker {
         message?: string;
       };
 
-      const stdoutStr = execErr.stdout ? execErr.stdout.toString() : '';
-      const stderrStr = execErr.stderr ? execErr.stderr.toString() : execErr.message || '';
+      const rawStdout = execErr.stdout ? execErr.stdout.toString() : '';
+      const rawStderr = execErr.stderr ? execErr.stderr.toString() : execErr.message || '';
+      const stdoutStr = redactOutputSecrets(rawStdout);
+      const stderrStr = redactOutputSecrets(rawStderr);
       const exitCode = typeof execErr.code === 'number' ? execErr.code : 1;
 
       // Handle Timeout

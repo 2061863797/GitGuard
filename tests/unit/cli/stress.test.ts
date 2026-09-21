@@ -27,6 +27,7 @@ import {
 } from '../../../src/interfaces/cli/index.js';
 import { createCliProgram } from '../../../src/interfaces/cli/program.js';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
+import { FileFindingStore } from '../../../src/findings/store.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import type { Finding } from '../../../src/types/finding.js';
 import { GITGUARD_VERSION } from '../../../src/index.js';
@@ -219,6 +220,24 @@ describe('Challenger M4-1: CLI Empirical Stress Suite', () => {
       await fixture.writeFile('base.txt', 'clean\n');
       await fixture.stage();
       await fixture.commit('init');
+
+      const store = new FileFindingStore(fixture.path);
+      await store.save([
+        {
+          id: 'GG-TEST-001',
+          ruleId: 'secret_scan',
+          source: 'deterministic',
+          status: 'block',
+          severity: 'CRITICAL',
+          lifecycle: 'active',
+          affectedFiles: ['base.txt'],
+          message: 'Previous test finding',
+          evidence: [],
+          expectedEvidence: [],
+          fingerprint: 'fp_base_001',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
 
       const outcome = await runCli([
         'verify',
@@ -495,7 +514,7 @@ describe('Challenger M4-1: CLI Empirical Stress Suite', () => {
       expect(outcome.stdout).toContain('No active findings found.');
     });
 
-    it('verify non-existent finding ID: should report PASS if nothing remains active', async () => {
+    it('verify non-existent finding ID: should fail verification with BLOCK on unknown finding IDs', async () => {
       await fixture.writeFile('test.txt', 'clean\n');
       await fixture.stage();
       await fixture.commit('init');
@@ -508,10 +527,8 @@ describe('Challenger M4-1: CLI Empirical Stress Suite', () => {
         'GG-NONEXISTENT',
         '--offline',
       ]);
-      expect(outcome.exitCode).toBe(0);
-      expect(outcome.stdout).toContain('GitGuard Verification Loop: PASS');
-      expect(outcome.stdout).toContain('Resolved Findings (1):');
-      expect(outcome.stdout).toContain('✓ GG-NONEXISTENT');
+      expect(outcome.exitCode).toBe(2);
+      expect(outcome.stdout).toContain('Verification failed: None of the targeted finding ID(s) exist');
     });
   });
 });

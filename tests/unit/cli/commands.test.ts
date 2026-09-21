@@ -16,6 +16,7 @@ import {
 import { createCliProgram } from '../../../src/interfaces/cli/program.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
+import { FileFindingStore } from '../../../src/findings/store.js';
 import type { Finding } from '../../../src/types/finding.js';
 
 describe('CLI Commands & Handlers', () => {
@@ -186,10 +187,28 @@ describe('CLI Commands & Handlers', () => {
       await fixture.stage();
       await fixture.commit('init');
 
+      const store = new FileFindingStore(fixture.path);
+      await store.save([
+        {
+          id: 'GG-RESOLVED-001',
+          ruleId: 'secret_scan',
+          source: 'deterministic',
+          status: 'block',
+          severity: 'CRITICAL',
+          lifecycle: 'active',
+          affectedFiles: ['test.txt'],
+          message: 'Previous finding resolved',
+          evidence: [],
+          expectedEvidence: [],
+          fingerprint: 'fp_test_123',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
       const outcome = await verifyCommand(
         {
           cwd: fixture.path,
-          findings: 'GG-NONEXISTENT',
+          findings: 'GG-RESOLVED-001',
           offline: true,
           silent: true,
         },

@@ -203,6 +203,14 @@ export function formatVerifyText(report: VerificationReport): string {
     }
   }
 
+  if (report.unknownFindings && report.unknownFindings.length > 0) {
+    lines.push('');
+    lines.push(`Unknown Findings (${report.unknownFindings.length}):`);
+    for (const id of report.unknownFindings) {
+      lines.push(`  ? ${id} (not found in finding store or history)`);
+    }
+  }
+
   lines.push(bar);
   return lines.join('\n');
 }

@@ -11,6 +11,7 @@ import {
   createTempGitRepo,
   type GitFixture,
 } from '../helpers/e2e-harness.js';
+import { FileFindingStore } from '../../../src/findings/store.js';
 
 describe('Tier 1: MCP verify_findings tool', () => {
   let fixture: GitFixture;
@@ -19,6 +20,37 @@ describe('Tier 1: MCP verify_findings tool', () => {
   beforeEach(async () => {
     fixture = await createTempGitRepo('e2e-mcp-vrf-');
     await setupGitGuardRepo(fixture);
+    const store = new FileFindingStore(fixture.repoPath);
+    await store.save([
+      {
+        id: 'GG-001',
+        ruleId: 'secret_scan',
+        source: 'deterministic',
+        status: 'block',
+        severity: 'CRITICAL',
+        lifecycle: 'active',
+        affectedFiles: [],
+        message: 'Mock finding 001',
+        evidence: [],
+        expectedEvidence: [],
+        fingerprint: 'fp_001',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'GG-002',
+        ruleId: 'secret_scan',
+        source: 'deterministic',
+        status: 'block',
+        severity: 'CRITICAL',
+        lifecycle: 'active',
+        affectedFiles: [],
+        message: 'Mock finding 002',
+        evidence: [],
+        expectedEvidence: [],
+        fingerprint: 'fp_002',
+        createdAt: new Date().toISOString(),
+      },
+    ]);
     session = await spawnMcpClient(fixture.repoPath);
   });
 

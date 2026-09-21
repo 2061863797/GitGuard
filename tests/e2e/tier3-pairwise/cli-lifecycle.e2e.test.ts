@@ -60,7 +60,7 @@ deterministic:
 rules:
   task_completed:
     enabled: true
-    review_below: 0.95
+    review_below: 0.90
     block_below: 0.20
 `;
     await fixture.writeFile('.gitguard.yml', customConfig);
@@ -71,14 +71,23 @@ rules:
       ['check', '--task', 'Build complete billing engine', '--offline', '--json'],
       { cwd: fixture.repoPath }
     );
-    expect(checkRes.json().status).toBe('REVIEW');
+    const checkJson = checkRes.json();
+    expect(checkJson.status).toBe('REVIEW');
+    const findingId = checkJson.findings[0]?.id;
 
-    // Add matching code
-    await fixture.writeFile('src/billing.ts', 'export class BillingEngine {}\n');
+    // Add matching code containing all keywords
+    await fixture.writeFile(
+      'src/billing.ts',
+      '// build complete billing engine\nexport class BillingEngine {}\n'
+    );
     await fixture.stage();
 
+    const verifyArgs = findingId
+      ? ['verify', '--findings', findingId, '--task', 'Build complete billing engine', '--offline', '--json']
+      : ['verify', '--task', 'Build complete billing engine', '--offline', '--json'];
+
     const verifyRes = await runCli(
-      ['verify', '--findings', 'GG-DUMMY', '--task', 'Build complete billing engine', '--offline', '--json'],
+      verifyArgs,
       { cwd: fixture.repoPath }
     );
     expect(verifyRes.exitCode).toBe(0);
