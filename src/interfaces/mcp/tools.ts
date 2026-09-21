@@ -188,6 +188,7 @@ export async function executeMcpTool(
           scope: params.scope ?? 'all',
           cwd,
           checkDeterministic: false,
+          taskOnly: true,
         });
 
         const taskCompProb =
@@ -197,12 +198,21 @@ export async function executeMcpTool(
         const unrelatedProb =
           result.semanticDecisions?.unrelated_changes?.probability ?? 0.0;
 
+        const effectiveProvider =
+          result.semanticDecisions?.task_completed?.provider || 'mock';
+
         const payload = {
           status: result.status,
           verdict: result.status,
           taskCompleted: taskCompProb,
           taskScopeMatch: scopeMatchProb,
           unrelatedChanges: unrelatedProb,
+          semantic: {
+            requestedProvider: 'typesafe',
+            effectiveProvider,
+            fallback: effectiveProvider.includes('mock'),
+            model: (result.metadata as any)?.model || 'jev-latest',
+          },
           findings: result.findings,
           summary: result.verdictSummary,
         };
@@ -231,11 +241,20 @@ export async function executeMcpTool(
           deterministicMap[det.id] = det.status;
         }
 
+        const effectiveProvider =
+          Object.values(result.semanticDecisions || {})[0]?.provider || 'mock';
+
         const payload = {
           status: result.status,
           verdict: result.status,
           canCommit,
           deterministic: deterministicMap,
+          semantic: {
+            requestedProvider: 'typesafe',
+            effectiveProvider,
+            fallback: effectiveProvider.includes('mock'),
+            model: (result.metadata as any)?.model || 'jev-latest',
+          },
           findings: result.findings,
           summary: result.verdictSummary,
         };
@@ -279,14 +298,26 @@ export async function executeMcpTool(
 
         const resolved = report.resolved || report.resolvedFindings || [];
         const remaining = report.remaining || report.remainingFindings || [];
-        const allResolved = report.status === 'PASS' || remaining.length === 0;
+        const unknownFindings = report.unknownFindings || [];
+        const newFindings = report.newFindings || [];
+        const targetsResolved = report.targetsResolved ?? (report.status === 'PASS' && remaining.length === 0 && unknownFindings.length === 0);
+        const allResolved = report.allResolved ?? (targetsResolved && newFindings.length === 0);
 
         const payload = {
           status: report.status,
           verdict: report.status,
+          targetsResolved,
+          allResolved,
           resolved,
           remaining,
-          allResolved,
+          unknownFindings,
+          newFindings: newFindings.map((f) => ({
+            id: f.id,
+            ruleId: f.ruleId,
+            status: f.status,
+            severity: f.severity,
+            message: f.message,
+          })),
           summary: report.verdictSummary,
         };
 

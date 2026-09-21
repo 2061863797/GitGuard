@@ -505,23 +505,18 @@ export class DefaultContextBuilder implements ContextBuilder {
         const cleanCandidate = toPosix(path.posix.normalize(candidate));
         if (seenTestPaths.has(cleanCandidate)) continue;
 
-        const fullTestPath = path.resolve(rootPath, cleanCandidate);
-        const exists = await fileExists(fullTestPath);
+        const content = await safeReadRepoFile(rootPath, cleanCandidate);
+        const exists = content !== null;
         const modifiedInDiff = diffFileMap.has(cleanCandidate);
 
         if (exists || modifiedInDiff) {
           seenTestPaths.add(cleanCandidate);
           let snippet: string | undefined;
 
-          if (exists) {
-            try {
-              const content = await fs.readFile(fullTestPath, 'utf-8');
-              const lines = content.split(/\r?\n/);
-              // Read first 30 lines for signature / suite overview
-              snippet = lines.slice(0, 30).join('\n');
-            } catch {
-              // Ignore snippet error
-            }
+          if (content) {
+            const lines = content.split(/\r?\n/);
+            // Read first 30 lines for signature / suite overview
+            snippet = lines.slice(0, 30).join('\n');
           }
 
           relatedTests.push({

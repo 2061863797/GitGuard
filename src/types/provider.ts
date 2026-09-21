@@ -85,6 +85,8 @@ export interface DeterministicCheckConfig {
   command?: string;
   /** Optional execution timeout override */
   timeoutMs?: number;
+  /** Optional custom regex patterns (e.g. for secret_scan) */
+  patterns?: string[];
 }
 
 /**

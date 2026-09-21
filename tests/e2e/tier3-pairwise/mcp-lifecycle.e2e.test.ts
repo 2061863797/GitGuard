@@ -11,6 +11,7 @@ import {
   type GitFixture,
   type McpSession,
 } from '../helpers/e2e-harness.js';
+import { FileFindingStore } from '../../../src/findings/store.js';
 
 describe('Tier 3: MCP Verification Lifecycle', () => {
   let fixture: GitFixture;
@@ -125,6 +126,23 @@ describe('Tier 3: MCP Verification Lifecycle', () => {
   });
 
   it('T3-MCP-LC-03: Double verification idempotency', async () => {
+    const store = new FileFindingStore(fixture.repoPath);
+    await store.save([
+      {
+        id: 'dummy_id',
+        ruleId: 'secret_scan',
+        source: 'deterministic',
+        status: 'block',
+        severity: 'CRITICAL',
+        lifecycle: 'active',
+        affectedFiles: [],
+        message: 'Dummy finding',
+        evidence: [],
+        expectedEvidence: [],
+        fingerprint: 'fp_dummy',
+        createdAt: new Date().toISOString(),
+      },
+    ]);
     await fixture.writeFile('src/code.ts', 'export const x = 1;\n');
     await fixture.stage('src/code.ts');
 

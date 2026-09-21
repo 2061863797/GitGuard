@@ -518,9 +518,9 @@ Configures the semantic judgment provider:
 | Key | Type | Default | Description |
 |:---|:---|:---:|:---|
 | `provider` | `string` | `'typesafe'` | Provider name: `'typesafe'` (live System One) or `'mock'` (offline simulation). |
-| `model` | `string` | `'jev'` | Identifier of the underlying semantic evaluator model. |
+| `model` | `string` | `'jev-latest'` | Identifier of the underlying semantic evaluator model (official recommended default). |
 | `timeout_ms` | `number` | `10000` | Maximum network wait time (ms) for model responses. |
-| `apiKey` | `string` | `undefined` | Optional explicit API key (defaults to `TYPESAFE_API_KEY` environment variable). |
+| `baseUrl` | `string` | `'https://api.typesafe.ai/v1'` | Base URL for TypeSafe API. Remote endpoints strictly require HTTPS. |
 
 ### `deterministic` (Object)
 Configures concrete tool checks executed as isolated subprocesses:

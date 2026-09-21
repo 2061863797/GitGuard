@@ -5,6 +5,7 @@
  * policy engine rules, and structured finding lifecycle management.
  */
 
+import * as crypto from 'node:crypto';
 import type {
   GitGuardEngine,
   InspectOptions,
@@ -114,6 +115,7 @@ export function toDeterministicRunnerConfig(
   if (policyDeterministic.secret_scan) {
     cfg.checks!.secret_scan = {
       enabled: policyDeterministic.secret_scan.enabled,
+      patterns: policyDeterministic.secret_scan.patterns,
     };
   }
 
@@ -407,12 +409,19 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     const questions: SemanticQuestion[] = [];
     const hasTask = context.task && context.task.task && context.task.task.trim().length > 0;
 
-    if (hasTask) {
+    if (options.taskOnly) {
+      questions.push(
+        STANDARD_QUESTIONS_MAP.task_completed,
+        STANDARD_QUESTIONS_MAP.task_scope_match,
+        STANDARD_QUESTIONS_MAP.unrelated_changes
+      );
+    } else if (hasTask) {
       questions.push(
         STANDARD_QUESTIONS_MAP.task_completed,
         STANDARD_QUESTIONS_MAP.task_scope_match,
         STANDARD_QUESTIONS_MAP.unrelated_changes,
         STANDARD_QUESTIONS_MAP.tests_required,
+        STANDARD_QUESTIONS_MAP.tests_present,
         STANDARD_QUESTIONS_MAP.security_sensitive_change,
         STANDARD_QUESTIONS_MAP.regression_risk
       );
@@ -420,13 +429,14 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       questions.push(
         STANDARD_QUESTIONS_MAP.unrelated_changes,
         STANDARD_QUESTIONS_MAP.tests_required,
+        STANDARD_QUESTIONS_MAP.tests_present,
         STANDARD_QUESTIONS_MAP.security_sensitive_change,
         STANDARD_QUESTIONS_MAP.regression_risk
       );
     }
 
-    // Include custom policy rules as questions
-    if (config.custom_rules && Array.isArray(config.custom_rules)) {
+    // Include custom policy rules as questions (unless in task-only mode)
+    if (!options.taskOnly && config.custom_rules && Array.isArray(config.custom_rules)) {
       for (const rule of config.custom_rules) {
         if (rule.enabled !== false) {
           questions.push({
@@ -449,14 +459,25 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       }
     }
 
-    // 5. Evaluate semantic decisions
     // 5. Evaluate semantic questions with caching
     const cacheEnabled = !options.noCache && config.gate?.cache?.enabled !== false;
-    const cache = new SemanticCache(context.repository?.rootPath ?? cwd, cacheEnabled);
+    const cacheDirOverride = config.gate?.cache?.directory;
+    const cache = new SemanticCache(context.repository?.rootPath ?? cwd, cacheEnabled, cacheDirOverride);
     const rawDiffText = context.diff?.raw || '';
     const taskKey = context.task?.task || '';
     const modelKey = config.system_one?.model || 'jev-latest';
-    const cacheKey = cache.computeKey(rawDiffText, taskKey, modelKey, questions.map((q) => q.id));
+
+    const instructionsFp = crypto.createHash('sha256').update(JSON.stringify(context.instructions || [])).digest('hex').slice(0, 16);
+    const surroundingFp = crypto.createHash('sha256').update(JSON.stringify(context.files?.map((f) => f.spans) || [])).digest('hex').slice(0, 16);
+    const relatedTestsFp = crypto.createHash('sha256').update(JSON.stringify(context.relatedTests || [])).digest('hex').slice(0, 16);
+    const questionsFp = crypto.createHash('sha256').update(JSON.stringify(questions.map((q) => ({ id: q.id, prompt: q.prompt, type: q.type })))).digest('hex').slice(0, 16);
+    const contextFp = `${surroundingFp}:${relatedTestsFp}`;
+
+    const cacheKey = cache.computeKey(rawDiffText, taskKey, modelKey, questions.map((q) => q.id), {
+      instructionsFingerprint: instructionsFp,
+      contextFingerprint: contextFp,
+      questionsFingerprint: questionsFp,
+    });
 
     let semanticDecisions: SemanticDecision[] = [];
     let cacheHit = false;
@@ -650,27 +671,16 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
    */
   public async verify(options: VerifyOptions = {}): Promise<VerificationReport> {
     const cwd = options.cwd ?? process.cwd();
+    const repoRoot = await this.gitAdapter.getRepositoryRoot(cwd);
 
-    // 1. Run a fresh check on the repository
-    const freshCheck = await this.check({
-      cwd,
-      scope: options.scope ?? 'all',
-      task: options.task,
-      config: options.config,
-      configPath: options.configPath,
-      offline: options.offline,
-      noCache: options.noCache,
-    });
-
-    // 2. Retrieve previous findings to evaluate
+    // 1. Retrieve previous findings and validate targeted IDs BEFORE running fresh check
     let previousFindings: Finding[] = [];
     let storedMap: Map<string, Finding> | undefined;
     const unknownFindings: string[] = [];
+    let allStored: Finding[] = [];
 
     if (options.findingIds && options.findingIds.length > 0) {
-      let allStored: Finding[] = [];
       try {
-        const repoRoot = await this.gitAdapter.getRepositoryRoot(cwd).catch(() => cwd);
         const store = new FileFindingStore(repoRoot);
         allStored = await store.list();
       } catch {
@@ -694,22 +704,35 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         }
       }
 
-      // If all targeted finding IDs do not exist, fail immediately with BLOCK
-      if (unknownFindings.length > 0 && previousFindings.length === 0) {
+      // Early short-circuit if any targeted finding IDs are unknown:
+      // Do not waste resources on subcommands or remote API calls!
+      if (unknownFindings.length > 0) {
+        const summary = previousFindings.length === 0
+          ? `Verification failed: None of the targeted finding ID(s) exist in repository store or history: [${unknownFindings.join(', ')}].`
+          : `Verification failed: None of the targeted finding ID(s) exist in repository store or history: [${unknownFindings.join(', ')}].`;
         return {
           status: 'BLOCK',
-          verdictSummary: `Verification failed: None of the targeted finding ID(s) exist in repository store or history: [${unknownFindings.join(', ')}].`,
-          task: freshCheck.task,
-          diffSummary: freshCheck.diffSummary,
+          verdictSummary: summary,
+          task: undefined,
+          diffSummary: { filesChanged: 0, insertions: 0, deletions: 0, hasBinaryChanges: false, truncated: false },
           findings: [],
           resolved: [],
           remaining: [],
           unknownFindings,
+          targetsResolved: false,
+          allResolved: false,
+          newFindings: [],
           resolvedFindings: [],
           remainingFindings: [],
-          deterministicResults: freshCheck.deterministicResults,
-          semanticDecisions: freshCheck.semanticDecisions,
-          metadata: freshCheck.metadata,
+          deterministicResults: [],
+          semanticDecisions: {},
+          metadata: {
+            durationMs: 0,
+            timestamp: new Date().toISOString(),
+            gitRoot: repoRoot,
+            headSha: '',
+            cacheHit: false,
+          },
         };
       }
     } else {
@@ -729,29 +752,85 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       }
     }
 
+    // 2. Run fresh check on the repository
+    const freshCheck = await this.check({
+      cwd,
+      scope: options.scope ?? 'all',
+      task: options.task,
+      config: options.config,
+      configPath: options.configPath,
+      offline: options.offline,
+      noCache: options.noCache,
+      strict: options.strict,
+    });
+
     // 3. Resolve previous findings against fresh findings
+    const basePrevious = allStored.length > 0 ? allStored : previousFindings;
     const report = this.findingManager.resolveFindings(
-      previousFindings,
+      basePrevious,
       freshCheck.findings
     );
 
-    // If specific finding IDs were requested for verification,
-    // ensure remaining findings are scoped to the targeted set
+    // 4. Scoped targeted evaluation & comprehensive gate synthesis
+    let targetsResolved = false;
+    let newFindings: Finding[] = [];
+
     if (options.findingIds && options.findingIds.length > 0) {
       const targetedSet = new Set(options.findingIds);
+
+      // Scoped resolved & remaining targeted findings
+      report.resolved = report.resolved.filter((id) => targetedSet.has(id));
+      report.resolvedFindings = report.resolved;
+
       report.remaining = report.remaining.filter((id) => targetedSet.has(id));
       report.remainingFindings = report.remaining;
-      report.findings = report.findings.filter((f) => targetedSet.has(f.id));
-      if (unknownFindings.length === 0 && report.remaining.length === 0) {
-        report.status = 'PASS';
-        report.verdictSummary = `All ${report.resolved.length} targeted finding(s) successfully resolved. Gate status: PASS.`;
-      }
-    }
 
-    if (unknownFindings.length > 0) {
-      report.unknownFindings = unknownFindings;
-      report.status = 'BLOCK';
-      report.verdictSummary = `Verification failed: ${unknownFindings.length} targeted finding(s) not found in repository store or history: [${unknownFindings.join(', ')}].`;
+      // Detect newly introduced findings that were not in the targeted set and not already present in stored findings
+      const storedIds = new Set(allStored.map((f) => f.id));
+      newFindings = report.findings.filter((f) => {
+        if (targetedSet.has(f.id)) return false;
+        if (f.ruleId === 'task_completed') return false;
+        if (storedIds.has(f.id)) return false;
+        return true;
+      });
+      report.newFindings = newFindings;
+
+      targetsResolved = unknownFindings.length === 0 && report.remaining.length === 0;
+      report.targetsResolved = targetsResolved;
+
+      // Determine overall Gate Status
+      if (options.targetOnly) {
+        report.status = targetsResolved ? 'PASS' : 'BLOCK';
+        report.allResolved = targetsResolved;
+        report.verdictSummary = targetsResolved
+          ? `All ${report.resolved.length} targeted finding(s) successfully resolved (target-only). Gate status: PASS.`
+          : `Verification incomplete: ${report.remaining.length} targeted finding(s) remain unresolved. Gate status: BLOCK.`;
+      } else {
+        const hasBlockingNewFindings = newFindings.some(
+          (f) => f.severity === 'CRITICAL' || f.status === 'block' || (options.strict && f.status === 'review')
+        );
+
+        if (!targetsResolved) {
+          report.status = 'BLOCK';
+          report.allResolved = false;
+          report.verdictSummary = `Verification failed: ${report.remaining.length} targeted finding(s) remain unresolved. Gate status: BLOCK.`;
+        } else if (hasBlockingNewFindings) {
+          report.status = 'BLOCK';
+          report.allResolved = false;
+          report.verdictSummary = `Targeted finding(s) [${report.resolved.join(', ')}] resolved, but ${newFindings.length} new blocking violation(s) detected [${newFindings.map((f) => f.ruleId).join(', ')}]. Gate status: BLOCK.`;
+        } else {
+          report.status = 'PASS';
+          report.allResolved = true;
+          report.verdictSummary = newFindings.length > 0
+            ? `All ${report.resolved.length} targeted finding(s) successfully resolved with ${newFindings.length} non-blocking advisory note(s). Gate status: PASS.`
+            : `All ${report.resolved.length} targeted finding(s) successfully resolved. Gate status: PASS.`;
+        }
+      }
+    } else {
+      targetsResolved = report.remaining.length === 0;
+      report.targetsResolved = targetsResolved;
+      report.allResolved = targetsResolved;
+      report.newFindings = [];
     }
 
     // Persist resolution state back to repository finding store

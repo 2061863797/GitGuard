@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import YAML from 'yaml';
 import type { PolicyConfig } from '../types/policy.js';
 import { ConfigurationError } from '../types/errors.js';
+import { safeReadRepoFile } from '../context/fs.js';
 
 /**
  * Canonical default GitGuard policy configuration.
@@ -169,6 +170,14 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
     errors.push('version must be a number or string');
   }
 
+  if (obj.system_one && typeof obj.system_one === 'object') {
+    if (obj.system_one.apiKey !== undefined) {
+      errors.push(
+        'Storing apiKey directly in .gitguard.yml is forbidden for credential security. Set the TYPESAFE_API_KEY environment variable instead.'
+      );
+    }
+  }
+
   if (obj.custom_rules !== undefined) {
     if (!Array.isArray(obj.custom_rules)) {
       errors.push('custom_rules must be an array');
@@ -255,6 +264,14 @@ export async function loadConfig(
     }
 
     try {
+      const lstats = await fs.promises.lstat(resolvedPath);
+      if (lstats.isSymbolicLink()) {
+        const realPath = await fs.promises.realpath(resolvedPath);
+        const normalizedRoot = path.resolve(cwd);
+        if (!realPath.startsWith(normalizedRoot + path.sep) && realPath !== normalizedRoot) {
+          throw new ConfigurationError(`Config file is a symbolic link pointing outside repository: ${resolvedPath}`);
+        }
+      }
       const content = await fs.promises.readFile(resolvedPath, 'utf-8');
       return parseConfig(content);
     } catch (err: any) {
@@ -269,11 +286,18 @@ export async function loadConfig(
   let currentDir = path.resolve(cwd);
   while (true) {
     for (const filename of CONFIG_FILE_NAMES) {
-      const candidate = path.resolve(currentDir, filename);
+      const candidate = path.join(currentDir, filename);
       if (fs.existsSync(candidate)) {
         try {
-          const content = await fs.promises.readFile(candidate, 'utf-8');
-          return parseConfig(content);
+          const stats = await fs.promises.stat(candidate);
+          if (stats.isDirectory()) {
+            throw new ConfigurationError(`Failed to read config at ${candidate}: EISDIR, illegal operation on a directory, read`);
+          }
+          const content = await safeReadRepoFile(currentDir, filename);
+          if (content !== null) {
+            return parseConfig(content);
+          }
+          throw new ConfigurationError(`Failed to read config at ${candidate}: Unreadable or escaping symbolic link`);
         } catch (err: any) {
           if (err instanceof ConfigurationError) {
             throw err;

@@ -151,6 +151,12 @@ export interface VerificationReport {
   remaining: string[];
   /** IDs of requested findings that were not found in store/history */
   unknownFindings?: string[];
+  /** Whether all targeted finding IDs were successfully resolved */
+  targetsResolved?: boolean;
+  /** Whether both targets are resolved AND no new blocking violations exist */
+  allResolved?: boolean;
+  /** New active findings introduced during this verification check that were not part of targeted findings */
+  newFindings?: Finding[];
   /** Alias for resolved finding IDs (backwards compatibility) */
   resolvedFindings?: string[];
   /** Alias for remaining active finding IDs (backwards compatibility) */

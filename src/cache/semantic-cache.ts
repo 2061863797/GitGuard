@@ -23,10 +23,16 @@ export class SemanticCache {
   private cacheDir: string;
   private enabled: boolean;
 
-  constructor(repoRoot: string = process.cwd(), enabled = true) {
+  constructor(repoRoot: string = process.cwd(), enabled = true, customDir?: string) {
     const resolvedRoot = findNearestGitRoot(repoRoot);
     const gitDir = resolveGitDir(resolvedRoot);
-    this.cacheDir = path.join(gitDir, 'gitguard', 'cache');
+    if (customDir && customDir.trim() !== '') {
+      this.cacheDir = path.isAbsolute(customDir)
+        ? customDir
+        : path.resolve(resolvedRoot, customDir);
+    } else {
+      this.cacheDir = path.join(gitDir, 'gitguard', 'cache');
+    }
     this.enabled = enabled;
   }
 

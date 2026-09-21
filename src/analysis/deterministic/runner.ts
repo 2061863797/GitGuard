@@ -17,7 +17,7 @@ import type {
   DeterministicCheckId,
 } from '../../types/provider.js';
 import { SecurityViolationError } from '../../types/errors.js';
-import { scanDiffForSecrets, redactSecret, SECRET_PATTERNS } from './secrets.js';
+import { scanDiffForSecrets, redactSecret, SECRET_PATTERNS, type SecretPattern } from './secrets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -248,7 +248,7 @@ export class DeterministicRunner implements DeterministicChecker {
     // 1. Secret Scanning Check
     const secretScanConfig = config.checks?.secret_scan;
     if (secretScanConfig?.enabled !== false) {
-      results.push(this.runSecretScan(context));
+      results.push(this.runSecretScan(context, secretScanConfig?.patterns));
     } else {
       results.push({
         id: 'secret_scan',
@@ -315,9 +315,21 @@ export class DeterministicRunner implements DeterministicChecker {
   /**
    * Runs the in-memory diff secret scanner.
    */
-  private runSecretScan(context: EvaluationContext): DeterministicResult {
+  private runSecretScan(
+    context: EvaluationContext,
+    userPatterns?: string[]
+  ): DeterministicResult {
     const startTime = Date.now();
-    const violations = scanDiffForSecrets(context.diff);
+    let effectivePatterns = SECRET_PATTERNS;
+    if (userPatterns && userPatterns.length > 0) {
+      const customPatterns: SecretPattern[] = userPatterns.map((p, idx) => ({
+        rule: `custom_secret_${idx + 1}`,
+        description: `User-defined secret pattern: ${p}`,
+        regex: new RegExp(p),
+      }));
+      effectivePatterns = [...SECRET_PATTERNS, ...customPatterns];
+    }
+    const violations = scanDiffForSecrets(context.diff, effectivePatterns);
     const durationMs = Date.now() - startTime;
 
     if (violations.length > 0) {

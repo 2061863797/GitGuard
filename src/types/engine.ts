@@ -63,6 +63,8 @@ export interface CheckOptions extends InspectOptions {
   noCache?: boolean;
   /** Restrict evaluation to specific finding IDs */
   findingIds?: string[];
+  /** Evaluate only task completion semantics (task_completed, task_scope_match, unrelated_changes) */
+  taskOnly?: boolean;
 }
 
 /**
@@ -80,6 +82,10 @@ export interface CheckResult extends VerificationReport {
 export interface VerifyOptions {
   /** Specific finding IDs to re-evaluate for resolution */
   findingIds?: string[];
+  /** Only verify resolution of targeted findings without considering newly introduced violations */
+  targetOnly?: boolean;
+  /** Treat WARN and REVIEW as strict blockers */
+  strict?: boolean;
   /** Declared task description or structured task context */
   task?: string | TaskContext;
   /** Git change scope */

@@ -138,12 +138,26 @@ export class MemoryFindingStore implements FindingStore {
 export class FileFindingStore implements FindingStore {
   private storePath: string;
   private memoryFallback: MemoryFindingStore;
+  private mutexQueue: Promise<void> = Promise.resolve();
 
   constructor(repoRoot: string = process.cwd()) {
     const resolvedRoot = findNearestGitRoot(repoRoot);
     const gitDir = resolveGitDir(resolvedRoot);
     this.storePath = path.join(gitDir, 'gitguard', 'findings.json');
     this.memoryFallback = new MemoryFindingStore();
+  }
+
+  private async withLock<T>(op: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const nextLock = new Promise<void>((resolve) => { release = resolve; });
+    const prevLock = this.mutexQueue;
+    this.mutexQueue = prevLock.then(() => nextLock);
+    await prevLock;
+    try {
+      return await op();
+    } finally {
+      release!();
+    }
   }
 
   /**
@@ -226,34 +240,42 @@ export class FileFindingStore implements FindingStore {
   }
 
   public async save(findings: Finding[]): Promise<void> {
-    const map = await this.readAll();
-    for (const f of findings) {
-      map.set(f.id, f);
-    }
-    await this.writeAll(map);
+    return this.withLock(async () => {
+      const map = await this.readAll();
+      for (const f of findings) {
+        map.set(f.id, f);
+      }
+      await this.writeAll(map);
+    });
   }
 
   public async upsert(finding: Finding): Promise<void> {
-    const map = await this.readAll();
-    map.set(finding.id, finding);
-    await this.writeAll(map);
+    return this.withLock(async () => {
+      const map = await this.readAll();
+      map.set(finding.id, finding);
+      await this.writeAll(map);
+    });
   }
 
   public async resolve(id: string): Promise<void> {
-    const map = await this.readAll();
-    const item = map.get(id);
-    if (item) {
-      item.lifecycle = 'resolved';
-      item.resolvedAt = new Date().toISOString();
-      map.set(id, item);
-      await this.writeAll(map);
-    }
-    await this.memoryFallback.resolve(id);
+    return this.withLock(async () => {
+      const map = await this.readAll();
+      const item = map.get(id);
+      if (item) {
+        item.lifecycle = 'resolved';
+        item.resolvedAt = new Date().toISOString();
+        map.set(id, item);
+        await this.writeAll(map);
+      }
+      await this.memoryFallback.resolve(id);
+    });
   }
 
   public async clear(): Promise<void> {
-    const map = new Map<string, Finding>();
-    await this.writeAll(map);
-    await this.memoryFallback.clear();
+    return this.withLock(async () => {
+      const map = new Map<string, Finding>();
+      await this.writeAll(map);
+      await this.memoryFallback.clear();
+    });
   }
 }

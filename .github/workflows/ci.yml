@@ -44,3 +44,9 @@ jobs:
 
       - name: Run Tests
         run: pnpm test
+
+      - name: Package & Distribution Smoke Test
+        run: |
+          pnpm pack
+          node bin/gitguard.js --version
+          node bin/gitguard.js inspect --scope working --json

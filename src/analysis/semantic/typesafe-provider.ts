@@ -122,18 +122,20 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
       process.env.TYPESAFE_BASE_URL ||
       'https://api.typesafe.ai/v1';
 
-    if (this.baseUrl.startsWith('http://')) {
-      try {
-        const url = new URL(this.baseUrl);
-        const host = url.hostname.toLowerCase();
-        if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
-          throw new SecurityViolationError(
-            `Insecure HTTP baseUrl is forbidden for remote host '${host}'. TypeSafe API credentials and code context require HTTPS.`
-          );
-        }
-      } catch (err) {
-        if (err instanceof SecurityViolationError) throw err;
+    try {
+      const url = new URL(this.baseUrl);
+      const isHttp = url.protocol === 'http:';
+      const isHttps = url.protocol === 'https:';
+      const host = url.hostname.toLowerCase();
+      const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+
+      if (!isHttps && !(isHttp && isLoopback)) {
+        throw new SecurityViolationError(
+          `Insecure HTTP baseUrl is forbidden for remote host '${host}'. TypeSafe API credentials and code context require HTTPS.`
+        );
       }
+    } catch (err) {
+      if (err instanceof SecurityViolationError) throw err;
     }
 
     // Use official recommended alias 'jev-latest' as default model
@@ -359,7 +361,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'GitGuard/0.2.2',
+            'User-Agent': 'GitGuard/0.2.3',
           },
           body: JSON.stringify(payload),
           signal: controller.signal,
