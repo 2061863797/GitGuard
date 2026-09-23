@@ -9,6 +9,9 @@ import { DefaultGitGuardEngine } from '../../core/engine.js';
 import { formatInspectText } from './formatters.js';
 
 export interface InspectCliOptions {
+  staged?: boolean;
+  working?: boolean;
+  all?: boolean;
   scope?: string;
   target?: string;
   format?: string;
@@ -26,7 +29,13 @@ export async function inspectCommand(
 ): Promise<{ exitCode: number; output: string; result?: InspectResult }> {
   try {
     let scope: ChangeScope = (options.scope as ChangeScope) ?? 'all';
-    if (options.scope === 'working') {
+    if (options.staged) {
+      scope = 'staged';
+    } else if (options.working) {
+      scope = 'working-tree';
+    } else if (options.all) {
+      scope = 'all';
+    } else if (options.scope === 'working') {
       scope = 'working-tree';
     } else if ((!options.scope || options.scope === 'all') && options.target) {
       scope = options.target.includes('..') ? 'range' : 'commit';

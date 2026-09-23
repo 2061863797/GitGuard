@@ -58,6 +58,15 @@ async function run() {
       stdio: 'inherit',
     });
 
+    // README links to the quickstart; keep it available in installed packages.
+    const installedQuickstart = path.join(
+      tempDir, 'node_modules', 'gitguard', 'docs', 'quickstart.zh-CN.md'
+    );
+    const quickstart = await fs.readFile(installedQuickstart, 'utf8');
+    if (!quickstart.includes('# GitGuard 快速上手')) {
+      throw new Error('Installed package is missing the Chinese quickstart guide');
+    }
+
     // 3. Verify CLI execution in isolated directory
     console.log('Verifying CLI --version execution...');
     const cliBin = path.join(

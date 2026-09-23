@@ -22,10 +22,21 @@ export function createCliProgram(): Command {
     .description('Repository-aware change verification and quality gate system in TypeScript')
     .version(GITGUARD_VERSION, '-v, --version', 'Output the current GitGuard version');
 
+  program.addHelpText('after',
+    '\nStart here:\n' +
+    '  gitguard inspect --cwd <repo>              Show changed files\n' +
+    '  gitguard check --offline --cwd <repo>      Run local quality checks\n' +
+    '  gitguard findings --cwd <repo>             List findings\n' +
+    '  See README.md for installation and configuration.\n'
+  );
+
   // 1. inspect
   program
     .command('inspect')
     .description('Inspect changed files, git diffs, and context')
+    .option('--staged', 'Inspect only staged changes')
+    .option('--working', 'Inspect only unstaged changes')
+    .option('--all', 'Inspect staged and unstaged changes (default)')
     .option('-s, --scope <scope>', 'Git change scope to inspect (staged, working, all, commit, range)', 'all')
     .option('-t, --target <target>', 'Target commit hash, branch name, or diff range')
     .option('--format <format>', 'Output format (text, json)', 'text')

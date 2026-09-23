@@ -22,7 +22,8 @@
     "dist",
     "bin",
     ".gitguard.yml",
-    "README.md"
+    "README.md",
+    "docs"
   ],
   "scripts": {
     "build": "rimraf dist && tsc",

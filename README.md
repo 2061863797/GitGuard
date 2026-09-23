@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/2061863797/GitGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/2061863797/GitGuard/actions)
 [![Node Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7-blue.svg)](https://www.typescriptlang.org/)
 [![Semantic Engine](https://img.shields.io/badge/Semantic%20Engine-TypeSafe%20%2F%20Jev-FF6B6B.svg)](https://typesafe.ai/)
 [![Protocol](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -10,6 +10,22 @@
 > **Repository-aware change verification and quality gate powered by TypeSafe / Jev System One semantic intelligence & deterministic checks.**
 
 GitGuard verifies code changes **before** they are committed, merged, or accepted into a software repository. Combining deterministic toolchains with **TypeSafe / Jev System One** semantic decision models, repository context extraction, and a configurable policy engine, GitGuard acts as an autonomous, high-precision verification infrastructure for both human developers and AI coding agents.
+
+## 先用起来
+
+在本仓库源码目录运行以下命令，先确认 CLI 可用：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm gitguard inspect --cwd .
+pnpm gitguard check --offline --cwd .
+```
+
+`inspect` 显示选中范围的改动；`check --offline` 不需要 API 密钥；选中范围有改动时，会按仓库配置执行测试、lint 和类型检查。若仓库没有待检查的改动，`PASS` 只表示当前范围为空。检查另一个项目时，把 `--cwd .` 换成该项目路径，并先确认其检查命令。完整的安装、检查、结果解读和排障步骤见 **[中文版快速上手](docs/quickstart.zh-CN.md)**。
+
+**安装提示：** [npm 上同名的 `gitguard` 包](https://www.npmjs.com/package/gitguard)当前是另一个提交信息检查工具。要使用本仓库代码，请按上面的源码命令运行；不要执行 `pnpm add -D gitguard` 来安装本项目。
+
+---
 
 ### 🌟 Powered by TypeSafe / Jev (System One AI)
 
@@ -22,12 +38,13 @@ Unlike conversational LLMs that produce verbose, unstructured code review opinio
 - 🧪 **Test Requirement Assessment (`tests_required`)**: Programmatically assesses whether new logic or edge paths demand corresponding unit or integration tests.
 - 🔒 **Security Sensitivity Assessment (`security_sensitive`)**: Evaluates whether auth flows, cryptographic primitives, or credential paths have been altered.
 - ⚠️ **Regression Risk Forecasting (`regression_risk`)**: Quantifies blast radius and categorizes regression likelihood into discrete risk levels (`low`, `medium`, `high`, `critical`).
-- ⚡ **Zero-Dependency Offline Fallback**: Features an embedded deterministic heuristic mock provider, ensuring continuous local & CI enforcement without external API keys.
+- ⚡ **Offline Mode Without an API Key**: Uses a local heuristic mock provider for semantic signals when `--offline` is selected.
 
 ---
 
 ## Table of Contents
 
+- [中文版快速上手](docs/quickstart.zh-CN.md)
 - [Why GitGuard?](#why-gitguard)
 - [Architecture & Overview](#architecture--overview)
 - [Core Concepts](#core-concepts)
@@ -56,7 +73,7 @@ However, in modern workflows driven by autonomous coding agents (Claude Code, Cu
 - **Were security-sensitive boundaries silently altered?**
 - **Were API keys or private credentials accidentally committed into diff hunks?**
 
-GitGuard bridges this gap. It does not write or generate code. Instead, it provides a read-only, deterministic, and semantic **verification loop**:
+GitGuard bridges this gap. It does not write or generate code. Its Git inspection is read-only; configured test, lint and typecheck commands can write files according to the target repository's scripts. The verification loop is:
 
 $$\text{Agent / Developer} \longrightarrow \text{Modify Code} \longrightarrow \text{GitGuard Inspect \& Check} \longrightarrow \text{Structured Findings} \longrightarrow \text{Remediate} \longrightarrow \text{GitGuard Verify} \longrightarrow \text{PASS}$$
 
@@ -162,122 +179,36 @@ Every rule violation produces a structured `Finding`:
 
 ## Prerequisites & Installation
 
-### Prerequisites
-- **Node.js**: `v20.0.0` or higher
-- **Git**: `2.30.0` or higher
-- **pnpm**: `9.0.0` or higher (recommended) or `npm` / `yarn`
+- Node.js 20+、Git 2.30+、pnpm 9+。
+- 在 GitGuard 源码目录运行 `pnpm install --frozen-lockfile`。
+- `pnpm gitguard --help` 直接运行源码，无需先构建；`node bin/gitguard.js` 和 MCP 客户端需要先运行 `pnpm build`。
 
-### Installation
-
-#### As a Project Dependency (Recommended)
-Add GitGuard to your project development dependencies:
-
-```bash
-pnpm add -D gitguard
-# or
-npm install --save-dev gitguard
-```
-
-#### Global Installation
-Install globally to use `gitguard` across any repository on your workstation:
-
-```bash
-pnpm add -g gitguard
-```
-
-#### Clone and Build from Source
-```bash
-git clone https://github.com/example/gitguard.git
-cd GitGuard
-pnpm install
-pnpm build
-pnpm test
-```
+npm 上的同名包不对应本仓库源码。当前请使用本仓库的 `pnpm gitguard` 脚本；向其他项目传入 `--cwd` 指定要检查的 Git 仓库。详见 [逐步操作与常见问题](docs/quickstart.zh-CN.md)。
 
 ---
 
 ## Developer Quickstart (CLI)
 
-The GitGuard CLI provides four primary subcommands plus the MCP server daemon:
+以下命令从 **GitGuard 源码目录**运行。将 `../my-project` 换成目标 Git 仓库路径；如果路径包含空格，请加引号。
 
 ```bash
-gitguard --help
+# 1. 先看当前有哪些改动
+pnpm gitguard inspect --cwd ../my-project
+
+# 2. 只看已暂存的改动
+pnpm gitguard inspect --staged --cwd ../my-project
+
+# 3. 对已暂存改动运行本地质量门禁；不需要 API 密钥
+pnpm gitguard check --offline --staged --task "修复登录超时" --cwd ../my-project
+
+# 4. 根据检查输出中的 finding ID 查看并复查问题
+pnpm gitguard findings --cwd ../my-project
+pnpm gitguard verify --offline --findings GG-001 --cwd ../my-project
 ```
 
-### 1. `gitguard inspect`
-Inspects repository changes, diffs, statistics, and preliminary findings without evaluating full policy gates:
+最后一条的 `GG-001` 是示例，请替换为 `findings` 实际输出的 ID。选中范围有改动时，`check` 会运行目标仓库配置的测试、lint 和类型检查；没有配置时，使用 `pnpm test`、`pnpm lint` 和 `pnpm tsc --noEmit`。其他技术栈应先修改目标仓库的 `.gitguard.yml`，示例见[快速上手](docs/quickstart.zh-CN.md#3-运行质量门禁)。
 
-```bash
-# Inspect all uncommitted modifications (staged + working tree)
-gitguard inspect
-
-# Inspect only staged changes formatted as JSON
-gitguard inspect --staged --json
-
-# Inspect a specific commit or branch range
-gitguard inspect --target origin/main..HEAD
-
-# Inspect with task context
-gitguard inspect --task "Refactor user authentication middleware"
-```
-
-### 2. `gitguard check`
-Runs full quality gate evaluation (deterministic checks + semantic decisions + policy rules):
-
-```bash
-# Check uncommitted changes against declared task
-gitguard check --task "Add rate limiting to payment endpoints"
-
-# Check only staged changes (ideal for Git pre-commit hooks)
-gitguard check --staged
-
-# Strict mode: treat WARN and REVIEW as blockers (exits with code 1 on non-PASS)
-gitguard check --strict
-
-# Offline mode: evaluate using deterministic fallback provider (no API key needed)
-gitguard check --offline
-
-# JSON output for tooling integration
-gitguard check --json
-```
-
-### 3. `gitguard findings`
-Lists, inspects, and filters active or resolved findings in the repository:
-
-```bash
-# List all active findings
-gitguard findings
-
-# Filter findings by status or severity
-gitguard findings --status block
-gitguard findings --severity critical
-
-# Filter by affected file or policy rule
-gitguard findings --file src/auth/token.ts
-gitguard findings --rule auth_requires_tests
-```
-
-### 4. `gitguard verify`
-Executes closed-loop verification to confirm whether previously detected findings have been successfully remediated:
-
-```bash
-# Verify resolution of specific finding IDs
-gitguard verify --findings F-DETERMINISTIC-TEST-FAIL-1,F-TESTS-REQUIRED-2
-
-# Verify in offline mode
-gitguard verify --findings F-SECRET-DETECTED-0 --offline
-```
-
-### 5. `gitguard mcp`
-Launches the Model Context Protocol (MCP) server over standard input/output (`stdio`) for AI coding agents:
-
-```bash
-# Start MCP server over stdio
-gitguard mcp
-
-# Start with diagnostic logging routed strictly to stderr
-gitguard mcp --debug
-```
+常用范围：`--staged` 为已暂存，`--working` 为未暂存，缺省为全部未提交改动；`inspect --target HEAD` 可检查最近一次提交。`--json` 输出结构化结果，`--strict` 让 `WARN`/`REVIEW` 返回非零退出码。在线语义检查需设置 `TYPESAFE_API_KEY`，首次使用建议从 `--offline` 开始。
 
 ---
 
@@ -336,160 +267,28 @@ GitGuard provides a native MCP server implementing the [Model Context Protocol](
 ### Protocol Hygiene Notice
 GitGuard strictly preserves the MCP stdio protocol. **Zero diagnostic messages are ever printed to `stdout`**. All diagnostic or debug output is routed strictly to `stderr` via `--debug`.
 
-### 1. Claude Desktop Configuration
-Add GitGuard to your Claude Desktop configuration file:
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+### 客户端配置示例
+
+先在 GitGuard 源码目录执行 `pnpm build`。在 MCP 客户端中配置 Node.js 启动 **本仓库的绝对路径**；下面是 Windows JSON 路径示例，其他系统请换成自己的绝对路径：
 
 ```json
 {
   "mcpServers": {
     "gitguard": {
       "command": "node",
-      "args": [
-        "/absolute/path/to/GitGuard/bin/gitguard.js",
-        "mcp"
-      ],
-      "env": {
-        "TYPESAFE_API_KEY": "your-typesafe-api-key-here"
-      }
+      "args": ["C:\\path\\to\\GitGuard\\bin\\gitguard.js", "mcp"]
     }
   }
 }
 ```
 
-*Tip (Development mode with `tsx`):*
-```json
-{
-  "mcpServers": {
-    "gitguard": {
-      "command": "pnpm",
-      "args": ["--dir", "/path/to/GitGuard", "gitguard", "mcp"],
-      "env": {
-        "TYPESAFE_API_KEY": "your-typesafe-api-key-here"
-      }
-    }
-  }
-}
-```
-
-### 2. Cursor IDE Configuration
-Create or update `.cursor/mcp.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "gitguard": {
-      "command": "node",
-      "args": ["bin/gitguard.js", "mcp"],
-      "env": {
-        "TYPESAFE_API_KEY": "your-typesafe-api-key-here"
-      }
-    }
-  }
-}
-```
-
-### 3. Google Antigravity Configuration
-In your Antigravity MCP configuration settings (`mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "gitguard": {
-      "command": "node",
-      "args": ["bin/gitguard.js", "mcp"]
-    }
-  }
-}
-```
+将该 `mcpServers` 项放入客户端的 MCP 配置文件。需要真实 TypeSafe 语义判断时，在客户端安全地配置 `TYPESAFE_API_KEY` 环境变量。不要把相对路径 `bin/gitguard.js` 直接复制到另一个项目的配置中。
 
 ---
 
 ## CI/CD Integration (GitHub Actions)
 
-GitGuard integrates seamlessly into GitHub Actions workflows to protect pull requests and main branches.
-
-### Workflow Example: `.github/workflows/gitguard.yml`
-
-```yaml
-name: GitGuard Verification Gate
-
-on:
-  pull_request:
-    branches: [ main, master, develop ]
-  push:
-    branches: [ main, master ]
-
-jobs:
-  verify:
-    name: Repository Change Verification
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Full history required for diff analysis
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'pnpm'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run GitGuard Quality Gate
-        id: gitguard
-        env:
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-        run: |
-          # In PR context, check changes between base branch and HEAD
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            pnpm gitguard check origin/${{ github.base_ref }}..HEAD --json > gitguard-report.json
-          else
-            pnpm gitguard check HEAD~1..HEAD --json > gitguard-report.json
-          fi
-
-      - name: Post Verification Summary to Pull Request
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            if (!fs.existsSync('gitguard-report.json')) return;
-            
-            const report = JSON.parse(fs.readFileSync('gitguard-report.json', 'utf8'));
-            const verdictIcon = report.status === 'PASS' ? '✅' : (report.status === 'WARN' ? '⚠️' : '❌');
-            
-            let body = `### ${verdictIcon} GitGuard Verification Gate: **${report.status}**\n\n`;
-            body += `${report.summary}\n\n`;
-            
-            if (report.findings && report.findings.length > 0) {
-              body += `| Finding ID | Severity | Status | Message |\n`;
-              body += `|:---|:---:|:---:|:---|\n`;
-              for (const f of report.findings) {
-                body += `| \`${f.id}\` | **${f.severity}** | ${f.status} | ${f.message} |\n`;
-              }
-            } else {
-              body += `*Zero violations detected. Changeset is clean and verified.*`;
-            }
-            
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
-```
+本仓库实际运行的 CI 配置是 [`.github/workflows/ci.yml`](https://github.com/2061863797/GitGuard/blob/main/.github/workflows/ci.yml)，会执行 lint、源码类型检查、构建、全量测试和打包安装测试。要在其他仓库使用 GitGuard，请先按[快速上手](docs/quickstart.zh-CN.md)确认本地命令与目标仓库的 `.gitguard.yml` 检查命令，再将同一命令接入其 CI。不要直接复制本仓库的 `pnpm gitguard` 脚本到没有 GitGuard 源码的项目。
 
 ---
 
@@ -589,7 +388,7 @@ Operational gate behavior:
 
 GitGuard is built with defense-in-depth principles:
 
-1. **Read-Only Git Operations**: All git inspections execute non-mutating commands (`git diff`, `git status`, `git show`). GitGuard will never mutate staging, alter commits, or modify your working tree.
+1. **Read-Only Git Inspection**: Git inspection avoids mutating staging and commits. Configured test, lint and typecheck commands run in the target repository and may write files according to those scripts.
 2. **Dual Evaluation Contexts**: Complete separation between `RawRepositoryContext` (used by local deterministic checks to catch hardcoded secrets in `.env` and diffs) and `SemanticEvaluationContext` (sanitized and redacted before sending to external AI models).
 3. **Command Sandbox**: Subprocesses run through `execFile` without shell interpolation (`shell: false`), disallowing command chaining (`&&`, `;`, `|`), redirection, or shell metacharacter injection.
 4. **Prompt Injection Mitigation**: Evaluation questions use typed primitives (`noul`, `choice`, `score`) with explicit instructions rather than free-form unconstrained prompts, preventing diff contents from hijacking verification results.
@@ -604,7 +403,7 @@ For complete details on our threat model and security boundaries, see [SECURITY.
 The repository includes a comprehensive test suite covering unit tests, stress suites, adversarial edge cases, and CLI/MCP integration:
 
 ```bash
-# Run full Vitest suite (684+ tests)
+# Run full Vitest suite
 pnpm test
 
 # Run unit tests only

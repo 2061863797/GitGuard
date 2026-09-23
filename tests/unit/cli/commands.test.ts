@@ -50,6 +50,25 @@ describe('CLI Commands & Handlers', () => {
       expect(outcome.result?.changedFiles).toHaveLength(0);
     });
 
+    it('accepts --staged and --working shortcuts consistently with check', async () => {
+      await fixture.writeFile('committed.txt', 'initial\n');
+      await fixture.stage();
+      await fixture.commit('initial');
+      await fixture.writeFile('staged.txt', 'staged\n');
+      await fixture.stage('staged.txt');
+      await fixture.writeFile('working.txt', 'working\n');
+
+      const staged = await inspectCommand(
+        { cwd: fixture.path, staged: true, silent: true }, engine
+      );
+      expect(staged.result?.changedFiles.map((file) => file.path)).toEqual(['staged.txt']);
+
+      const working = await inspectCommand(
+        { cwd: fixture.path, working: true, silent: true }, engine
+      );
+      expect(working.result?.changedFiles.map((file) => file.path)).toEqual(['working.txt']);
+    });
+
     it('should output JSON when --json or --format json is specified', async () => {
       await fixture.writeFile('file.txt', 'hello');
       await fixture.stage();
@@ -232,6 +251,11 @@ describe('CLI Commands & Handlers', () => {
       expect(commandNames).toContain('findings');
       expect(commandNames).toContain('verify');
       expect(commandNames).toContain('mcp');
+
+      const inspect = program.commands.find((command) => command.name() === 'inspect');
+      const inspectFlags = inspect?.options.map((option) => option.long);
+      expect(inspectFlags).toContain('--staged');
+      expect(inspectFlags).toContain('--working');
     });
   });
 });
