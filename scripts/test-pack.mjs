@@ -19,8 +19,9 @@ async function run() {
   console.log('--- Starting Package Smoke Test ---');
   const pkgJsonRaw = await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8');
   const pkgJson = JSON.parse(pkgJsonRaw);
+  const packageName = pkgJson.name;
   const expectedVersion = pkgJson.version;
-  console.log(`Target package version: ${expectedVersion}`);
+  console.log(`Target package: ${packageName}@${expectedVersion}`);
 
   // Create isolated temp workspace
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gitguard-pack-test-'));
@@ -60,7 +61,7 @@ async function run() {
 
     // README links to the quickstart; keep it available in installed packages.
     const installedQuickstart = path.join(
-      tempDir, 'node_modules', 'gitguard', 'docs', 'quickstart.zh-CN.md'
+      tempDir, 'node_modules', packageName, 'docs', 'quickstart.zh-CN.md'
     );
     const quickstart = await fs.readFile(installedQuickstart, 'utf8');
     if (!quickstart.includes('# GitGuard 快速上手')) {
@@ -87,13 +88,13 @@ async function run() {
     // 4. Verify ESM module imports
     console.log('Verifying ESM package import...');
     execSync(
-      `node -e "import('gitguard').then(m => { if (!m.DefaultGitGuardEngine) throw new Error('DefaultGitGuardEngine missing'); console.log('Successfully imported DefaultGitGuardEngine'); })"`,
+      `node -e "import('${packageName}').then(m => { if (!m.DefaultGitGuardEngine) throw new Error('DefaultGitGuardEngine missing'); console.log('Successfully imported DefaultGitGuardEngine'); })"`,
       { cwd: tempDir, stdio: 'inherit' }
     );
 
     console.log('Verifying ESM subpath types import...');
     execSync(
-      `node -e "import('gitguard/types').then(() => { console.log('Successfully resolved gitguard/types export'); })"`,
+      `node -e "import('${packageName}/types').then(() => { console.log('Successfully resolved ${packageName}/types export'); })"`,
       { cwd: tempDir, stdio: 'inherit' }
     );
 

@@ -11,6 +11,12 @@
 
 GitGuard verifies code changes **before** they are committed, merged, or accepted into a software repository. Combining deterministic toolchains with **TypeSafe / Jev System One** semantic decision models, repository context extraction, and a configurable policy engine, GitGuard acts as an autonomous, high-precision verification infrastructure for both human developers and AI coding agents.
 
+## Windows EXE 下载
+
+Windows x64 用户可从 [GitHub Releases](https://github.com/2061863797/GitGuard/releases)下载 `GitGuard.exe`，无需安装 Node.js 或 pnpm 即可启动。也可在 [Windows EXE 工作流](https://github.com/2061863797/GitGuard/actions/workflows/windows-exe.yml)的成功运行中下载构建产物。运行前需要安装 Git；完整命令和注意事项见 [Windows EXE 使用说明](docs/windows-exe.zh-CN.md)。这是一款命令行工具，请在 PowerShell 中运行。
+
+---
+
 ## 先用起来
 
 在本仓库源码目录运行以下命令，先确认 CLI 可用：
@@ -23,7 +29,7 @@ pnpm gitguard check --offline --cwd .
 
 `inspect` 显示选中范围的改动；`check --offline` 不需要 API 密钥；选中范围有改动时，会按仓库配置执行测试、lint 和类型检查。若仓库没有待检查的改动，`PASS` 只表示当前范围为空。检查另一个项目时，把 `--cwd .` 换成该项目路径，并先确认其检查命令。完整的安装、检查、结果解读和排障步骤见 **[中文版快速上手](docs/quickstart.zh-CN.md)**。
 
-**安装提示：** [npm 上同名的 `gitguard` 包](https://www.npmjs.com/package/gitguard)当前是另一个提交信息检查工具。要使用本仓库代码，请按上面的源码命令运行；不要执行 `pnpm add -D gitguard` 来安装本项目。
+**包名说明：** 本项目的 npm 包名已改为 `gitguard-verify`，CLI 命令仍为 `gitguard`。目前尚未发布新包，请按上面的源码命令运行。[npm 上的 `gitguard` 包](https://www.npmjs.com/package/gitguard)属于另一个项目。
 
 ---
 
@@ -44,6 +50,7 @@ Unlike conversational LLMs that produce verbose, unstructured code review opinio
 
 ## Table of Contents
 
+- [Windows EXE 使用说明](docs/windows-exe.zh-CN.md)
 - [中文版快速上手](docs/quickstart.zh-CN.md)
 - [Why GitGuard?](#why-gitguard)
 - [Architecture & Overview](#architecture--overview)
@@ -183,7 +190,7 @@ Every rule violation produces a structured `Finding`:
 - 在 GitGuard 源码目录运行 `pnpm install --frozen-lockfile`。
 - `pnpm gitguard --help` 直接运行源码，无需先构建；`node bin/gitguard.js` 和 MCP 客户端需要先运行 `pnpm build`。
 
-npm 上的同名包不对应本仓库源码。当前请使用本仓库的 `pnpm gitguard` 脚本；向其他项目传入 `--cwd` 指定要检查的 Git 仓库。详见 [逐步操作与常见问题](docs/quickstart.zh-CN.md)。
+npm 包名为 `gitguard-verify`，命令名保持 `gitguard`。新包发布前，请使用本仓库的 `pnpm gitguard` 脚本；向其他项目传入 `--cwd` 指定要检查的 Git 仓库。详见 [逐步操作与常见问题](docs/quickstart.zh-CN.md)。
 
 ---
 

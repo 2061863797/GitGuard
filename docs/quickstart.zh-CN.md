@@ -1,8 +1,10 @@
 # GitGuard 快速上手
 
+如果希望下载 Windows EXE 直接运行，请先看 [Windows EXE 使用说明](windows-exe.zh-CN.md)。
+
 这份说明适用于本仓库的源码版本。第一次使用只需准备 Node.js 20+、Git 2.30+ 和 pnpm 9+。所有命令都在 **GitGuard 源码目录**执行；`--cwd` 指向要检查的 Git 仓库。
 
-> [npm 上同名的 `gitguard` 包](https://www.npmjs.com/package/gitguard)目前是另一个提交信息检查工具。不要用 `pnpm add -D gitguard` 或 `pnpm add -g gitguard` 来获取本仓库版本。
+> 本项目的 npm 包名是 `gitguard-verify`，CLI 命令仍是 `gitguard`。新包尚未发布，下面使用源码运行。[npm 上的 `gitguard` 包](https://www.npmjs.com/package/gitguard)属于另一个项目，不要用它安装本项目。
 
 ## 1. 启动并确认 CLI 可用
 

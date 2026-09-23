@@ -1,5 +1,5 @@
 {
-  "name": "gitguard",
+  "name": "gitguard-verify",
   "version": "0.2.5",
   "description": "Repository-aware change verification and quality gate system in TypeScript",
   "type": "module",
@@ -38,6 +38,8 @@
     "test:e2e": "vitest run tests/e2e",
     "test:coverage": "vitest run --coverage",
     "test:pack": "node scripts/test-pack.mjs",
+    "build:exe": "node scripts/build-windows-exe.mjs",
+    "test:exe": "node scripts/test-windows-exe.mjs",
     "gitguard": "tsx bin/gitguard.ts"
   },
   "dependencies": {
@@ -48,12 +50,14 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "@vitest/coverage-v8": "^5.0.1",
+    "esbuild": "0.28.2",
     "oxlint": "1.85.0",
+    "postject": "1.0.0-alpha.6",
     "rimraf": "^6.1.3",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1",
-    "@vitest/coverage-v8": "^5.0.1"
+    "vitest": "^5.0.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

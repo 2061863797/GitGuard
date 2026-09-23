@@ -4,6 +4,7 @@ node_modules/
 
 # Build Output
 dist/
+dist-exe/
 *.tsbuildinfo
 
 # Test & Coverage
