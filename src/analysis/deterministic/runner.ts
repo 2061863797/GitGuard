@@ -17,7 +17,7 @@ import type {
   DeterministicCheckId,
 } from '../../types/provider.js';
 import { SecurityViolationError } from '../../types/errors.js';
-import { scanDiffForSecrets, redactSecret, SECRET_PATTERNS, type SecretPattern } from './secrets.js';
+import { scanDiffForSecrets, redactSecret, SECRET_PATTERNS, validateCustomSecretPattern, type SecretPattern } from './secrets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -322,11 +322,15 @@ export class DeterministicRunner implements DeterministicChecker {
     const startTime = Date.now();
     let effectivePatterns = SECRET_PATTERNS;
     if (userPatterns && userPatterns.length > 0) {
-      const customPatterns: SecretPattern[] = userPatterns.map((p, idx) => ({
-        rule: `custom_secret_${idx + 1}`,
-        description: `User-defined secret pattern: ${p}`,
-        regex: new RegExp(p),
-      }));
+      const customPatterns: SecretPattern[] = userPatterns.map((p, idx) => {
+        const reason = validateCustomSecretPattern(p);
+        if (reason) throw new SecurityViolationError(`Unsafe custom secret pattern ${idx + 1}: ${reason}`);
+        return {
+          rule: `custom_secret_${idx + 1}`,
+          description: `User-defined secret pattern: ${p}`,
+          regex: new RegExp(p),
+        };
+      });
       effectivePatterns = [...SECRET_PATTERNS, ...customPatterns];
     }
     const violations = scanDiffForSecrets(context.diff, effectivePatterns);

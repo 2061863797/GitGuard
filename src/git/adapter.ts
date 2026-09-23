@@ -42,7 +42,6 @@ const ALLOWED_GIT_SUBCOMMANDS = new Set([
   'check-ref-format',
   'cat-file',
   'symbolic-ref',
-  'config',
   'merge-base',
   'version',
 ]);
@@ -68,7 +67,14 @@ const FORBIDDEN_GIT_COMMANDS = new Set([
   'mv',
   'clone',
   'init',
+  'config',
 ]);
+
+function assertSafeRef(ref: string): void {
+  if (!ref || ref.startsWith('-') || /\s|[\u0000-\u001f\u007f]/.test(ref)) {
+    throw new InvalidGitRefError(ref);
+  }
+}
 
 /**
  * Normalizes file system paths to POSIX standard slashes.
@@ -116,14 +122,8 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const targetCwd = cwd || this.defaultCwd || process.cwd();
 
-    // Find the primary git subcommand (skipping leading flags like -C, etc.)
-    let subcommand = '';
-    for (const arg of args) {
-      if (!arg.startsWith('-')) {
-        subcommand = arg;
-        break;
-      }
-    }
+    // Global Git options are not part of this adapter's read API.
+    const subcommand = args[0] || '';
 
     if (FORBIDDEN_GIT_COMMANDS.has(subcommand)) {
       throw new ForbiddenGitOperationError(subcommand || args[0]);
@@ -131,6 +131,23 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
 
     if (subcommand && !ALLOWED_GIT_SUBCOMMANDS.has(subcommand)) {
       throw new ForbiddenGitOperationError(subcommand);
+    }
+
+    if (
+      subcommand === 'symbolic-ref' &&
+      (args.length !== 4 || args[1] !== '--short' || args[2] !== '-q' || args[3] !== 'HEAD')
+    ) {
+      throw new ForbiddenGitOperationError('symbolic-ref write or unsupported arguments');
+    }
+
+    if (
+      ['diff', 'show', 'log'].includes(subcommand) &&
+      args.slice(1).some((arg) =>
+        arg === '--output' || arg.startsWith('--output=') ||
+        arg === '--ext-diff' || arg === '--textconv'
+      )
+    ) {
+      throw new ForbiddenGitOperationError(`${subcommand} write or external-diff option`);
     }
 
     try {
@@ -351,7 +368,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
     await this.ensureRepo(targetCwd);
 
     const headSha = await this.getHeadSha(targetCwd);
-    const args: string[] = ['diff', '--no-color'];
+    const args: string[] = ['diff', '--no-color', '--no-ext-diff', '--no-textconv'];
 
     let diffText = '';
 
@@ -386,8 +403,9 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
         if (!sha) {
           throw new InvalidGitRefError('commitSha is required for commit scope');
         }
+        assertSafeRef(sha);
         // git show --no-color --format= <sha> safely outputs patch even for root commit
-        const showArgs = ['show', '--no-color', '--format=', sha];
+        const showArgs = ['show', '--no-color', '--no-ext-diff', '--no-textconv', '--format=', sha];
         if (options?.pathFilters && options.pathFilters.length > 0) {
           showArgs.push('--', ...options.pathFilters);
         }
@@ -397,8 +415,13 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       case 'range': {
         let range = '';
         if (options?.baseRef && options.baseRef.includes('..')) {
+          const refs = options.baseRef.split(/\.\.\.?/);
+          if (refs.length !== 2) throw new InvalidGitRefError(options.baseRef);
+          refs.forEach(assertSafeRef);
           range = options.baseRef;
         } else if (options?.baseRef && options?.headRef) {
+          assertSafeRef(options.baseRef);
+          assertSafeRef(options.headRef);
           range = `${options.baseRef}..${options.headRef}`;
         } else {
           throw new InvalidGitRefError('baseRef and headRef are required for range scope');
@@ -409,6 +432,8 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       case 'pull-request': {
         const base = options?.baseRef || 'main';
         const head = options?.headRef || 'HEAD';
+        assertSafeRef(base);
+        assertSafeRef(head);
         args.push(`${base}...${head}`);
         break;
       }
@@ -537,6 +562,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
     const relativePath = toPosixPath(path.relative(root, path.resolve(root, filepath)));
 
     if (ref) {
+      assertSafeRef(ref);
       try {
         const res = await this.executeGit(['show', `${ref}:${relativePath}`], targetCwd);
         return res.stdout;

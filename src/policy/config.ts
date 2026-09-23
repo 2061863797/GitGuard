@@ -9,6 +9,7 @@ import YAML from 'yaml';
 import type { PolicyConfig } from '../types/policy.js';
 import { ConfigurationError } from '../types/errors.js';
 import { safeReadRepoFile } from '../context/fs.js';
+import { validateCustomSecretPattern } from '../analysis/deterministic/secrets.js';
 
 /**
  * Canonical default GitGuard policy configuration.
@@ -156,7 +157,7 @@ export function deepMerge<T extends Record<string, any>>(target: T, source: Reco
 /**
  * Validates the raw configuration object structure and thresholds.
  */
-export function validateConfig(raw: unknown): { valid: boolean; errors: string[] } {
+export function validateConfig(raw: unknown, allowCustomProvider = false): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
   if (!raw || typeof raw !== 'object') {
@@ -180,15 +181,20 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
       const isOfficial =
         rawUrl === 'https://api.typesafe.ai' ||
         rawUrl === 'https://api.typesafe.ai/v1' ||
-        rawUrl === 'https://api.typesafe.ai/v1/systemone' ||
-        rawUrl.startsWith('http://localhost') ||
-        rawUrl.startsWith('http://127.0.0.1');
-      if (!isOfficial) {
+        rawUrl === 'https://api.typesafe.ai/v1/systemone';
+      if (!isOfficial && !allowCustomProvider) {
         errors.push(
           `Repository configuration (.gitguard.yml) cannot override system_one.baseUrl to custom endpoint ('${rawUrl}') to prevent API key exfiltration. Use the TYPESAFE_BASE_URL environment variable or --allow-custom-provider CLI flag instead.`
         );
       }
     }
+  }
+
+  if (obj.privacy?.redact_secrets === false) {
+    errors.push('Repository configuration cannot disable privacy.redact_secrets');
+  }
+  if (obj.privacy?.include_full_files === true) {
+    errors.push('Repository configuration cannot enable privacy.include_full_files');
   }
 
   if (obj.gate?.cache?.directory !== undefined) {
@@ -212,13 +218,10 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
         const pattern = obj.deterministic.secret_scan.patterns[i];
         if (typeof pattern !== 'string' || !pattern.trim()) {
           errors.push(`deterministic.secret_scan.patterns[${i}] must be a non-empty string`);
-        } else if (pattern.length > 500) {
-          errors.push(`deterministic.secret_scan.patterns[${i}] exceeds maximum allowed length of 500 characters`);
         } else {
-          try {
-            new RegExp(pattern);
-          } catch (err: any) {
-            errors.push(`deterministic.secret_scan.patterns[${i}] is an invalid regular expression: ${err.message}`);
+          const reason = validateCustomSecretPattern(pattern);
+          if (reason) {
+            errors.push(`deterministic.secret_scan.patterns[${i}] is unsafe: ${reason}`);
           }
         }
       }
@@ -257,7 +260,7 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
 /**
  * Parses and validates YAML configuration text, merging it over DEFAULT_POLICY_CONFIG.
  */
-export function parseConfig(yamlContent: string): PolicyConfig {
+export function parseConfig(yamlContent: string, allowCustomProvider = false): PolicyConfig {
   if (!yamlContent || yamlContent.trim() === '') {
     return JSON.parse(JSON.stringify(DEFAULT_POLICY_CONFIG)) as PolicyConfig;
   }
@@ -281,7 +284,7 @@ export function parseConfig(yamlContent: string): PolicyConfig {
     throw new ConfigurationError('Configuration file must contain a valid YAML mapping/object');
   }
 
-  const validation = validateConfig(parsed);
+  const validation = validateConfig(parsed, allowCustomProvider);
   if (!validation.valid) {
     throw new ConfigurationError(`Invalid configuration schema: ${validation.errors.join('; ')}`);
   }
@@ -298,7 +301,8 @@ export function parseConfig(yamlContent: string): PolicyConfig {
  */
 export async function loadConfig(
   configPath?: string,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  allowCustomProvider = false
 ): Promise<PolicyConfig> {
   // 1. Explicit path specified
   if (configPath) {
@@ -320,7 +324,7 @@ export async function loadConfig(
         }
       }
       const content = await fs.promises.readFile(resolvedPath, 'utf-8');
-      return parseConfig(content);
+      return parseConfig(content, allowCustomProvider);
     } catch (err: any) {
       if (err instanceof ConfigurationError) {
         throw err;
@@ -342,7 +346,7 @@ export async function loadConfig(
           }
           const content = await safeReadRepoFile(currentDir, filename);
           if (content !== null) {
-            return parseConfig(content);
+            return parseConfig(content, allowCustomProvider);
           }
           throw new ConfigurationError(`Failed to read config at ${candidate}: Unreadable or escaping symbolic link`);
         } catch (err: any) {

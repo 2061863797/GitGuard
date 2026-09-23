@@ -45,7 +45,7 @@ import {
   SecurityViolationError,
 } from '../types/errors.js';
 import { SemanticCache } from '../cache/semantic-cache.js';
-import { scanContentForSecrets, SECRET_PATTERNS, type SecretPattern } from '../analysis/deterministic/secrets.js';
+import { scanContentForSecrets, SECRET_PATTERNS, validateCustomSecretPattern, type SecretPattern } from '../analysis/deterministic/secrets.js';
 
 /**
  * Dependency injection options for DefaultGitGuardEngine.
@@ -176,12 +176,13 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
   private async resolveConfig(
     cwd: string,
     optionsConfig?: PolicyConfig,
-    configPath?: string
+    configPath?: string,
+    allowCustomProvider = false
   ): Promise<PolicyConfig> {
     if (optionsConfig) {
       return optionsConfig;
     }
-    return await loadConfig(configPath, cwd);
+    return await loadConfig(configPath, cwd, allowCustomProvider);
   }
 
   /**
@@ -292,7 +293,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       throw new NotAGitRepositoryError(cwd);
     }
 
-    const config = await this.resolveConfig(cwd, options.config, options.configPath);
+    const config = await this.resolveConfig(cwd, options.config, options.configPath, options.allowCustomProvider);
     let scope = options.scope;
     if (!scope) {
       if (options.target) {
@@ -399,18 +400,17 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       const configuredKey = config.system_one?.apiKey?.trim();
       const effectiveKey = configuredKey || process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY;
       const configuredBaseUrl = config.system_one?.baseUrl?.trim();
-      if (configuredBaseUrl && !options.allowCustomProvider && !process.env.TYPESAFE_BASE_URL) {
+      if (configuredBaseUrl && !options.allowCustomProvider) {
+        let parsed: URL;
         try {
-          const parsed = new URL(configuredBaseUrl);
-          const allowedHosts = ['api.typesafe.ai', 'localhost', '127.0.0.1'];
-          if (!allowedHosts.includes(parsed.hostname.toLowerCase())) {
-            throw new SecurityViolationError(
-              `Custom system_one.baseUrl [${configuredBaseUrl}] is forbidden in repository policy configuration to prevent API key exfiltration.`
-            );
-          }
-        } catch (err: any) {
-          if (err instanceof SecurityViolationError) throw err;
+          parsed = new URL(configuredBaseUrl);
+        } catch {
           throw new ConfigurationError(`Invalid system_one.baseUrl format: ${configuredBaseUrl}`);
+        }
+        if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'api.typesafe.ai') {
+          throw new SecurityViolationError(
+            `Custom system_one.baseUrl [${configuredBaseUrl}] requires explicit --allow-custom-provider permission.`
+          );
         }
       }
       provider = new TypeSafeSystemOneProvider({
@@ -814,15 +814,19 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
 
       // Check if secret finding was committed into HEAD or still present in file
       if (prev.ruleId.includes('secret') || prev.id.includes('secret')) {
-        const config = await this.resolveConfig(cwd, options.config, options.configPath);
+        const config = await this.resolveConfig(cwd, options.config, options.configPath, options.allowCustomProvider);
         let secretPatterns: SecretPattern[] = SECRET_PATTERNS;
         const userPatterns = config.deterministic?.secret_scan?.patterns;
         if (userPatterns && userPatterns.length > 0) {
-          const customPatterns: SecretPattern[] = userPatterns.map((p, idx) => ({
-            rule: `custom_secret_${idx + 1}`,
-            description: `User-defined secret pattern: ${p}`,
-            regex: new RegExp(p),
-          }));
+          const customPatterns: SecretPattern[] = userPatterns.map((p, idx) => {
+            const reason = validateCustomSecretPattern(p);
+            if (reason) throw new SecurityViolationError(`Unsafe custom secret pattern ${idx + 1}: ${reason}`);
+            return {
+              rule: `custom_secret_${idx + 1}`,
+              description: `User-defined secret pattern: ${p}`,
+              regex: new RegExp(p),
+            };
+          });
           secretPatterns = [...SECRET_PATTERNS, ...customPatterns];
         }
 

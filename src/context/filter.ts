@@ -81,6 +81,11 @@ const SECRET_REGEX_LIST: Array<{ pattern: RegExp; replacer: (match: string, ...a
     pattern: /((?:password|passwd|secret|api_key|apikey|access_token|private_key|auth_token)\s*[:=]\s*["'])([^"'\s]{8,})(["'])/gi,
     replacer: (_m, p1: string, _val: string, p3: string) => `${p1}${REDACTION_TOKEN}${p3}`,
   },
+  // Unquoted YAML and similar configuration values also occur in ordinary files.
+  {
+    pattern: /(\b(?:password|passwd|api_key|apikey|secret_key|auth_token|access_token|private_key)\s*:\s*)([^\s"'`#,]{16,})/gi,
+    replacer: (_m, prefix: string) => `${prefix}${REDACTION_TOKEN}`,
+  },
 ];
 
 /**

@@ -253,19 +253,24 @@ export class FileFindingStore implements FindingStore {
    * Reads raw findings from the JSON file.
    */
   private async readAll(): Promise<Map<string, Finding>> {
+    let content: string;
     try {
-      const content = await fs.readFile(this.storePath, 'utf8');
-      const data = JSON.parse(content) as Finding[];
-      const map = new Map<string, Finding>();
-      if (Array.isArray(data)) {
-        for (const item of data) {
-          map.set(item.id, item);
-        }
-      }
-      return map;
-    } catch {
-      return new Map();
+      content = await fs.readFile(this.storePath, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
+      throw new GitGuardError(`Cannot read finding store: ${this.storePath}`, 'FINDING_STORE_READ_ERROR');
     }
+
+    let data: unknown;
+    try {
+      data = JSON.parse(content);
+    } catch {
+      throw new GitGuardError(`Finding store contains invalid JSON: ${this.storePath}`, 'FINDING_STORE_CORRUPT');
+    }
+    if (!Array.isArray(data) || data.some((item) => !item || typeof item.id !== 'string')) {
+      throw new GitGuardError(`Finding store has an invalid structure: ${this.storePath}`, 'FINDING_STORE_CORRUPT');
+    }
+    return new Map(data.map((item: Finding) => [item.id, item]));
   }
 
   /**

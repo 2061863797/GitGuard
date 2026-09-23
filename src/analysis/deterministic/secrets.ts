@@ -86,7 +86,64 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     regex: /(?:password|passwd|api_key|apikey|secret_key|auth_token)\s*[:=]\s*["'`]([^"'`\s]{8,})["'`]/i,
     extractGroup: 1,
   },
+  {
+    rule: 'unquoted_config_secret',
+    description: 'Unquoted configuration credential',
+    regex: /\b(?:password|passwd|api_key|apikey|secret_key|auth_token|access_token|private_key)\s*:\s*([^\s"'`#,]{16,})/i,
+    extractGroup: 1,
+  },
 ];
+
+/** Restricts user-defined patterns to a bounded, non-backtracking regex subset. */
+export function validateCustomSecretPattern(source: string): string | null {
+  if (!source.trim() || source.length > 500) {
+    return 'pattern must contain 1-500 characters';
+  }
+
+  let inClass = false;
+  let escaped = false;
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (escaped) {
+      if (!inClass && /[1-9]/.test(char)) return 'backreferences are not allowed';
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '[' && !inClass) {
+      inClass = true;
+      continue;
+    }
+    if (char === ']' && inClass) {
+      inClass = false;
+      continue;
+    }
+    if (inClass) continue;
+    if (char === '{') {
+      const end = source.indexOf('}', i + 1);
+      const count = end < 0 ? '' : source.slice(i + 1, end);
+      if (!/^\d+$/.test(count) || Number(count) > 128) {
+        return 'only exact repetitions up to {128} are allowed';
+      }
+      i = end;
+      continue;
+    }
+    if (char === '}' || char === '(' || char === ')' || char === '|' ||
+        char === '*' || char === '+' || char === '?') {
+      return 'groups, alternation, and variable repetitions are not allowed';
+    }
+  }
+
+  try {
+    new RegExp(source);
+  } catch {
+    return 'invalid regular expression';
+  }
+  return null;
+}
 
 /**
  * Scans consecutive addition lines (multiline declarations) for secrets that span lines.
