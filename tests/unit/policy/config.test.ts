@@ -150,6 +150,36 @@ system_one:
     expect(invalid.errors.length).toBeGreaterThan(0);
   });
 
+  it('rejects unsafe repository provider and privacy overrides', () => {
+    expect(() => parseConfig('version: 1\nsystem_one:\n  baseUrl: http://127.0.0.1:8080\n'))
+      .toThrow(ConfigurationError);
+    expect(() => parseConfig('version: 1\nprivacy:\n  redact_secrets: false\n'))
+      .toThrow(ConfigurationError);
+    expect(() => parseConfig('version: 1\nprivacy:\n  include_full_files: true\n'))
+      .toThrow(ConfigurationError);
+    expect(() => parseConfig('version: 1\nprivacy:\n  redact_secrets: 0\n'))
+      .toThrow(ConfigurationError);
+    expect(() => parseConfig('version: 1\nprivacy:\n  include_full_files: "true"\n'))
+      .toThrow(ConfigurationError);
+    expect(() => parseConfig('version: 1\nprivacy: []\n'))
+      .toThrow(ConfigurationError);
+
+    const approved = parseConfig(
+      'version: 1\nsystem_one:\n  baseUrl: http://127.0.0.1:8080\n',
+      true
+    );
+    expect(approved.system_one?.baseUrl).toBe('http://127.0.0.1:8080');
+  });
+
+  it('rejects unbounded custom secret patterns but accepts bounded patterns', () => {
+    expect(() => parseConfig('version: 1\ndeterministic:\n  secret_scan:\n    patterns: ["^(a+)+$"]\n'))
+      .toThrow(ConfigurationError);
+    const config = parseConfig(
+      'version: 1\ndeterministic:\n  secret_scan:\n    patterns: ["[A-Z0-9]{32}"]\n'
+    );
+    expect(config.deterministic?.secret_scan?.patterns).toEqual(['[A-Z0-9]{32}']);
+  });
+
   it('should deepMerge nested objects without mutating source or target', () => {
     const target = { a: 1, b: { c: 2, d: 3 } };
     const source = { b: { c: 99 }, e: 5 };

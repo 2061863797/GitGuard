@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
-import { NotAGitRepositoryError } from '../../../src/types/errors.js';
+import { InvalidGitRefError, NotAGitRepositoryError } from '../../../src/types/errors.js';
 import type { Finding } from '../../../src/types/finding.js';
 
 describe('DefaultGitGuardEngine', () => {
@@ -155,6 +155,45 @@ describe('DefaultGitGuardEngine', () => {
       expect(result.exitCode).toBe(0);
       expect(result.findings).toHaveLength(0);
       expect(result.diffSummary.filesChanged).toBe(0);
+    });
+
+    it('rejects option-like targets without writing a file or returning PASS', async () => {
+      await fixture.writeFile('README.md', '# Project\n');
+      await fixture.stage();
+      await fixture.commit('initial');
+      const outputPath = path.join(fixture.repoPath, 'unexpected-output.txt');
+
+      await expect(engine.check({
+        cwd: fixture.path,
+        scope: 'commit',
+        target: '--output=' + outputPath,
+        offline: true,
+      })).rejects.toThrow(InvalidGitRefError);
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('requires an explicit opt-in for a repository configured custom provider', async () => {
+      await fixture.writeFile('README.md', '# Project\n');
+      await fixture.stage();
+      const commitSha = await fixture.commit('initial');
+      await fixture.writeFile('.gitguard.yml',
+        'version: 1\nsystem_one:\n  baseUrl: http://127.0.0.1:8080\n');
+
+      await expect(engine.check({
+        cwd: fixture.path,
+        scope: 'commit',
+        target: commitSha,
+        offline: true,
+      })).rejects.toThrow(/cannot override system_one.baseUrl/);
+
+      const approved = await engine.check({
+        cwd: fixture.path,
+        scope: 'commit',
+        target: commitSha,
+        offline: true,
+        allowCustomProvider: true,
+      });
+      expect(approved.status).toBeDefined();
     });
 
     it('should execute semantic evaluators and produce gate verdict', async () => {

@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   scanDiffForSecrets,
+  scanContentForSecrets,
   redactSecret,
   SECRET_PATTERNS,
 } from '../../../src/analysis/deterministic/secrets.js';
@@ -27,6 +28,15 @@ describe('Deterministic Analysis Layer', () => {
       expect(redactSecret('123456')).toBe('***[REDACTED]***');
       expect(redactSecret('AKIA1234567890ABCDEF')).toBe('AKI...[REDACTED]...EF');
       expect(redactSecret(['ghp', 'abcdef1234567890'].join('_'))).toBe('ghp...[REDACTED]...90');
+    });
+
+    it('detects unquoted YAML credentials and masks the finding', () => {
+      const token = 'abcdef0123456789abcdef0123456789';
+      const violations = scanContentForSecrets('name: example\napi_key: ' + token, 'config.yml');
+      expect(violations).toHaveLength(1);
+      expect(violations[0].rule).toBe('unquoted_config_secret');
+      expect(violations[0].line).toBe(2);
+      expect(violations[0].message).not.toContain(token);
     });
 
     it('returns empty violations for clean diffs without secrets', () => {
@@ -512,6 +522,14 @@ describe('Deterministic Analysis Layer', () => {
       expect(secretResult?.status).toBe('failed');
       expect(secretResult?.violations?.length).toBeGreaterThan(0);
       expect(secretResult?.exitCode).toBe(1);
+    });
+
+    it('rejects unsafe custom patterns passed directly to the runner', async () => {
+      const runner = new DeterministicRunner();
+      const context = createMockContext();
+      await expect(runner.run(context, {
+        checks: { secret_scan: { enabled: true, patterns: ['^(a+)+$'] } },
+      })).rejects.toThrow(SecurityViolationError);
     });
 
     it('skips secret_scan when explicitly disabled in configuration', async () => {

@@ -520,7 +520,7 @@ Configures the semantic judgment provider:
 | `provider` | `string` | `'typesafe'` | Provider name: `'typesafe'` (live System One) or `'mock'` (offline simulation). |
 | `model` | `string` | `'jev-latest'` | Identifier of the underlying semantic evaluator model (official recommended default). |
 | `timeout_ms` | `number` | `10000` | Maximum network wait time (ms) for model responses. |
-| `baseUrl` | `string` | `'https://api.typesafe.ai/v1'` | Base URL for TypeSafe API. Remote endpoints strictly require HTTPS. |
+| `baseUrl` | `string` | `'https://api.typesafe.ai/v1'` | Repository configuration accepts only official TypeSafe URLs unless the caller explicitly sets `--allow-custom-provider`. |
 
 ### `deterministic` (Object)
 Configures concrete tool checks executed as isolated subprocesses:
@@ -537,6 +537,7 @@ Configures concrete tool checks executed as isolated subprocesses:
 | `typecheck.run` | `string` | `'pnpm tsc --noEmit'` | Typecheck compiler command. |
 | `secret_scan.enabled` | `boolean` | `true` | Enables real-time regex secret detection on added diff lines. |
 | `secret_scan.block_on_detection` | `boolean` | `true` | Immediate `BLOCK` verdict when unredacted credentials are discovered. |
+| `secret_scan.patterns` | `string[]` | `[]` | Extra regex patterns. For safety, patterns may use literals, character classes, anchors, escapes and exact repetitions up to `{128}`; groups, alternation and variable repetitions are rejected. |
 
 ### `rules` (Object)
 Configures standard built-in semantic decision rules and thresholds:
@@ -570,6 +571,8 @@ Data sanitization and privacy controls:
 | `redact_secrets` | `boolean` | `true` | Replaces detected credentials with `***[REDACTED]***` before logging or model calls. |
 | `include_full_files` | `boolean` | `false` | Restricts context to diff hunks and surrounding spans rather than whole files. |
 | `exclude_paths` | `string[]` | `['.env*', '*.pem', '*.key', ...]` | File patterns entirely excluded from diff extraction and context. |
+
+Repository configuration cannot set `redact_secrets: false` or `include_full_files: true`.
 
 ### `gate` (Object)
 Operational gate behavior:
@@ -614,9 +617,12 @@ pnpm test:e2e
 pnpm test:coverage
 ```
 
-### TypeScript Compilation & Typecheck
+### Lint, TypeScript Compilation & Typecheck
 ```bash
-# Typecheck with zero errors
+# Lint source, tests, CLI and scripts
+pnpm lint
+
+# Typecheck production source
 pnpm typecheck
 
 # Full production build to dist/

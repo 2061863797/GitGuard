@@ -66,6 +66,9 @@ describe('GitCLIAdapter', () => {
         ['merge', 'feat'],
         ['rebase', 'main'],
         ['rm', 'file.txt'],
+        ['config', 'user.name', 'Attacker'],
+        ['symbolic-ref', 'HEAD', 'refs/heads/attacker'],
+        ['--git-dir=.', 'status'],
       ];
 
       for (const args of forbiddenOperations) {
@@ -194,6 +197,33 @@ describe('GitCLIAdapter', () => {
 
       await expect(
         adapter.getDiff('range', { baseRef: 'nonexistent_branch', headRef: 'HEAD' })
+      ).rejects.toThrow(InvalidGitRefError);
+    });
+
+    it('rejects Git output options and option-like revisions before executing Git', async () => {
+      await fixture.writeFile('base.txt', 'base\n');
+      await fixture.stage();
+      await fixture.commit('initial');
+
+      const outputPath = path.join(fixture.repoPath, 'unexpected-output.txt');
+      await expect(
+        adapter.executeGit(['show', 'HEAD', '--output=' + outputPath])
+      ).rejects.toThrow(ForbiddenGitOperationError);
+      await expect(
+        adapter.getDiff('commit', { commitSha: '--output=' + outputPath })
+      ).rejects.toThrow(InvalidGitRefError);
+      await expect(
+        adapter.getDiff('range', { baseRef: '--output=' + outputPath, headRef: 'HEAD' })
+      ).rejects.toThrow(InvalidGitRefError);
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('rejects non-commit objects in commit scope', async () => {
+      await fixture.writeFile('README.md', 'contents\n');
+      await fixture.stage();
+      await fixture.commit('initial');
+      await expect(
+        adapter.getDiff('commit', { commitSha: 'HEAD:README.md' })
       ).rejects.toThrow(InvalidGitRefError);
     });
 

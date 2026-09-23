@@ -190,11 +190,16 @@ export function validateConfig(raw: unknown, allowCustomProvider = false): { val
     }
   }
 
-  if (obj.privacy?.redact_secrets === false) {
-    errors.push('Repository configuration cannot disable privacy.redact_secrets');
-  }
-  if (obj.privacy?.include_full_files === true) {
-    errors.push('Repository configuration cannot enable privacy.include_full_files');
+  if (obj.privacy !== undefined &&
+      (!obj.privacy || typeof obj.privacy !== 'object' || Array.isArray(obj.privacy))) {
+    errors.push('privacy must be an object');
+  } else {
+    if (obj.privacy?.redact_secrets !== undefined && obj.privacy.redact_secrets !== true) {
+      errors.push('Repository configuration cannot disable privacy.redact_secrets');
+    }
+    if (obj.privacy?.include_full_files !== undefined && obj.privacy.include_full_files !== false) {
+      errors.push('Repository configuration cannot enable privacy.include_full_files');
+    }
   }
 
   if (obj.gate?.cache?.directory !== undefined) {

@@ -71,7 +71,8 @@ const FORBIDDEN_GIT_COMMANDS = new Set([
 ]);
 
 function assertSafeRef(ref: string): void {
-  if (!ref || ref.startsWith('-') || /\s|[\u0000-\u001f\u007f]/.test(ref)) {
+  if (!ref || ref.startsWith('-') || /\s/.test(ref) ||
+      Array.from(ref).some((char) => char.charCodeAt(0) <= 31 || char.charCodeAt(0) === 127)) {
     throw new InvalidGitRefError(ref);
   }
 }
@@ -159,6 +160,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
         env: {
           ...process.env,
           LC_ALL: 'C',
+          GIT_OPTIONAL_LOCKS: '0',
         },
       });
 
@@ -404,6 +406,12 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
           throw new InvalidGitRefError('commitSha is required for commit scope');
         }
         assertSafeRef(sha);
+        try {
+          const type = await this.executeGit(['cat-file', '-t', sha], targetCwd);
+          if (type.stdout.trim() !== 'commit') throw new InvalidGitRefError(sha);
+        } catch {
+          throw new InvalidGitRefError(sha);
+        }
         // git show --no-color --format= <sha> safely outputs patch even for root commit
         const showArgs = ['show', '--no-color', '--no-ext-diff', '--no-textconv', '--format=', sha];
         if (options?.pathFilters && options.pathFilters.length > 0) {

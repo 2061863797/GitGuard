@@ -106,6 +106,14 @@ MIIEowIBAAKCAQEA0Y1u3...samplePrivateData...
       expect(result).toBe(`const password = "${REDACTION_TOKEN}";`);
     });
 
+    it('redacts unquoted YAML credentials in ordinary files', () => {
+      const token = 'abcdef0123456789abcdef0123456789';
+      const result = redactSecrets('api_key: ' + token + '\nname: example');
+      expect(result).toContain('api_key: ' + REDACTION_TOKEN);
+      expect(result).not.toContain(token);
+      expect(result).toContain('name: example');
+    });
+
     it('should leave innocent text unredacted', () => {
       const innocent = 'export function add(a: number, b: number): number { return a + b; }';
       expect(redactSecrets(innocent)).toBe(innocent);
