@@ -20,6 +20,9 @@ export interface SemanticCacheEntry {
   decisions: SemanticDecision[];
 }
 
+/** Cache keys are always 64-char lowercase hex digests produced by computeKey(). */
+const CACHE_KEY_PATTERN = /^[0-9a-f]{64}$/;
+
 export class SemanticCache {
   private cacheDir: string;
   private enabled: boolean;
@@ -73,15 +76,30 @@ export class SemanticCache {
 
   /**
    * Retrieves cached decisions if available, valid, and not expired.
+   * Rejects entries whose embedded cacheKey/provider/model do not match the
+   * current request, so a forged or stale cache file can never poison the gate.
    */
-  public async get(key: string, maxTtlMs?: number): Promise<SemanticDecision[] | null> {
+  public async get(
+    key: string,
+    expected: { provider: string; model: string },
+    maxTtlMs?: number
+  ): Promise<SemanticDecision[] | null> {
     if (!this.enabled) return null;
+    if (!CACHE_KEY_PATTERN.test(key)) return null;
 
     try {
       const filePath = path.join(this.cacheDir, `${key}.json`);
       const data = await fs.readFile(filePath, 'utf8');
       const entry = JSON.parse(data) as SemanticCacheEntry;
       if (!entry || !Array.isArray(entry.decisions)) {
+        return null;
+      }
+
+      // Integrity checks: the entry must belong to this exact key, provider and model.
+      if (entry.cacheKey !== key) {
+        return null;
+      }
+      if (entry.provider !== expected.provider || entry.model !== expected.model) {
         return null;
       }
 
@@ -112,6 +130,7 @@ export class SemanticCache {
     decisions: SemanticDecision[]
   ): Promise<void> {
     if (!this.enabled) return;
+    if (!CACHE_KEY_PATTERN.test(key)) return;
 
     try {
       await fs.mkdir(this.cacheDir, { recursive: true });
