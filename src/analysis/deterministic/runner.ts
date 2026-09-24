@@ -47,10 +47,14 @@ export function sanitizeSubprocessEnv(baseEnv: NodeJS.ProcessEnv = process.env):
     if (
       sensitiveExactKeys.includes(key) ||
       upper.includes('SECRET') ||
+      upper.includes('TOKEN') ||
       upper.includes('API_KEY') ||
       upper.includes('AUTH_TOKEN') ||
       upper.includes('PRIVATE_KEY') ||
-      upper.includes('PASSWORD')
+      upper.includes('PASSWORD') ||
+      // Matches DEPLOY_KEY, SSH_KEY, ENCRYPTION_KEY, ... (any KEY as a
+      // standalone underscore-delimited segment)
+      /(^|_)KEY($|_)/.test(upper)
     ) {
       delete cleanEnv[key];
     }

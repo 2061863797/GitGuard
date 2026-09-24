@@ -563,7 +563,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       ];
     } else {
       if (cacheEnabled && !isOffline) {
-        const cached = await cache.get(cacheKey);
+        const cached = await cache.get(cacheKey, { provider: provider.name, model: modelKey });
         if (cached && cached.length > 0) {
           // If requireSemantic is enabled, ensure cached entry is genuine TypeSafe and not mock/fallback
           const cachedIsMockOrFallback =
@@ -680,8 +680,14 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         const repoRoot = context.repository?.rootPath ?? (await this.gitAdapter.getRepositoryRoot(cwd).catch(() => cwd));
         const store = new FileFindingStore(repoRoot);
         await store.save(checkResult.findings);
-      } catch {
-        // ignore storage write errors
+        checkResult.metadata.persistenceOk = true;
+      } catch (err) {
+        // Finding persistence must never fail silently: if the store write
+        // fails, a later `verify()` would wrongly treat these findings as resolved.
+        checkResult.metadata.persistenceOk = false;
+        console.error(
+          `[gitguard] WARNING: failed to persist ${checkResult.findings.length} finding(s) to the repository store: ${(err as Error)?.message ?? err}`
+        );
       }
     }
 
@@ -705,8 +711,10 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       try {
         const store = new FileFindingStore(repoRoot);
         allStored = await store.list();
-      } catch {
-        // ignore
+      } catch (err) {
+        console.error(
+          `[gitguard] WARNING: failed to read findings from the repository store: ${(err as Error)?.message ?? err}`
+        );
       }
       if (allStored.length === 0) {
         if (typeof (this.findingManager as any).loadPersistentFindings === 'function') {
@@ -760,10 +768,12 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     } else {
       let activeStored: Finding[] = [];
       try {
-        const store = new FileFindingStore(cwd);
+        const store = new FileFindingStore(repoRoot);
         activeStored = await store.list({ lifecycle: 'active' });
-      } catch {
-        // ignore
+      } catch (err) {
+        console.error(
+          `[gitguard] WARNING: failed to read findings from the repository store: ${(err as Error)?.message ?? err}`
+        );
       }
       if (activeStored.length > 0) {
         previousFindings = activeStored;
@@ -946,8 +956,9 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     }
 
     // Persist resolution state back to repository finding store
+    let verifyPersistenceOk: boolean | undefined;
     try {
-      const store = new FileFindingStore(cwd);
+      const store = new FileFindingStore(repoRoot);
       const allToSave = [...report.findings];
       for (const id of report.resolved || []) {
         const prev = storedMap ? storedMap.get(id) : previousFindings.find((p) => p.id === id);
@@ -962,8 +973,12 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       if (allToSave.length > 0) {
         await store.save(allToSave);
       }
-    } catch {
-      // ignore
+      verifyPersistenceOk = true;
+    } catch (err) {
+      verifyPersistenceOk = false;
+      console.error(
+        `[gitguard] WARNING: failed to persist verification state to the repository store: ${(err as Error)?.message ?? err}`
+      );
     }
 
     // Merge check context and metadata
@@ -972,6 +987,9 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     report.deterministicResults = freshCheck.deterministicResults;
     report.semanticDecisions = freshCheck.semanticDecisions;
     report.metadata = freshCheck.metadata;
+    if (verifyPersistenceOk !== undefined) {
+      report.metadata.persistenceOk = verifyPersistenceOk;
+    }
 
     return report;
   }

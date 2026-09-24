@@ -145,6 +145,12 @@ export interface VerificationReportMetadata {
   headSha: string;
   /** Whether results were retrieved from evaluation cache */
   cacheHit: boolean;
+  /**
+   * Whether finding persistence to the repository store succeeded.
+   * `false` means findings were computed but NOT saved: a later `verify()`
+   * may not see them. Absent when no persistence was attempted.
+   */
+  persistenceOk?: boolean;
 }
 
 /**

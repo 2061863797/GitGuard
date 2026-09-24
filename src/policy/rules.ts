@@ -108,6 +108,7 @@ export const DEFAULT_BUILTIN_RULES: Record<string, PolicyRule> = {
     enabled: true,
     description: 'Security-sensitive code modification evaluator',
     thresholds: {
+      warn: 0.5,
       review: 0.65,
       block: 0.9,
     },

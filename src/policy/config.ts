@@ -124,12 +124,27 @@ export const CONFIG_FILE_NAMES = [
 ];
 
 /**
+ * Keys that must never be merged as plain data: assigning them would mutate
+ * the prototype chain instead of setting an own property (prototype pollution).
+ * Note: `yaml` preserves `__proto__` as an own key (visible via Object.keys),
+ * so a malicious `.gitguard.yml` could otherwise smuggle these past validation.
+ */
+const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
  * Recursively deep-merges source object properties into a cloned target object.
+ * Skips prototype-polluting keys (`__proto__`, `constructor`, `prototype`).
  */
 export function deepMerge<T extends Record<string, any>>(target: T, source: Record<string, any>): T {
   const result = { ...target } as Record<string, any>;
 
   for (const key of Object.keys(source)) {
+    // Prototype pollution guard: never copy magic keys, even if present as
+    // own properties of the parsed YAML object.
+    if (UNSAFE_MERGE_KEYS.has(key)) {
+      continue;
+    }
+
     const sourceVal = source[key];
     const targetVal = result[key];
 
@@ -155,6 +170,26 @@ export function deepMerge<T extends Record<string, any>>(target: T, source: Reco
 }
 
 /**
+ * Recursively detects prototype-polluting keys anywhere in a parsed config
+ * object. Uses Object.keys/values (never dot access) so a `__proto__` own
+ * key planted by YAML parsing is reliably observed.
+ */
+function containsUnsafeKeys(value: unknown): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsUnsafeKeys);
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (keys.some((k) => UNSAFE_MERGE_KEYS.has(k))) {
+    return true;
+  }
+  return keys.some((k) => containsUnsafeKeys(obj[k]));
+}
+
+/**
  * Validates the raw configuration object structure and thresholds.
  */
 export function validateConfig(raw: unknown, allowCustomProvider = false): { valid: boolean; errors: string[] } {
@@ -162,6 +197,12 @@ export function validateConfig(raw: unknown, allowCustomProvider = false): { val
 
   if (!raw || typeof raw !== 'object') {
     return { valid: false, errors: ['Configuration must be a non-null object'] };
+  }
+
+  if (containsUnsafeKeys(raw)) {
+    errors.push(
+      'Configuration contains forbidden keys (__proto__/constructor/prototype). Remove them from .gitguard.yml.'
+    );
   }
 
   const obj = raw as Record<string, any>;

@@ -15,7 +15,9 @@ export interface SafeReadOptions {
 
 /**
  * Safely reads a file located inside the repository root.
- * Guarantees that symlinks pointing outside the repository root are strictly blocked.
+ * Guarantees that symlinks pointing outside the repository root are strictly blocked,
+ * including symlinks in intermediate directories (e.g. `linkdir/passwd` where
+ * `linkdir` is a symlink escaping the repo).
  * Returns null if the file does not exist, escapes the repository, or is unreadable.
  */
 export async function safeReadRepoFile(
@@ -23,31 +25,35 @@ export async function safeReadRepoFile(
   relativePath: string,
   options: SafeReadOptions = {}
 ): Promise<string | null> {
-  const normalizedRepo = path.resolve(repoRoot);
-  const targetPath = path.resolve(normalizedRepo, relativePath);
-
-  // 1. Initial path traversal check
-  if (!targetPath.startsWith(normalizedRepo + path.sep) && targetPath !== normalizedRepo) {
-    return null;
-  }
-
   try {
-    const lstats = await fs.lstat(targetPath);
+    // Canonicalize the repo root first so the containment check below is sound
+    // on platforms where temp/system directories themselves contain symlinks
+    // (e.g. /tmp -> /private/tmp on macOS).
+    const normalizedRepo = await fs.realpath(path.resolve(repoRoot));
+    const targetPath = path.resolve(normalizedRepo, relativePath);
 
-    // 2. Symbolic link boundary enforcement
-    if (lstats.isSymbolicLink()) {
-      if (options.allowSymlinksWithinRepo === false) {
-        return null;
-      }
-      const realPath = await fs.realpath(targetPath);
-      // Ensure the resolved canonical path remains strictly inside the repository
-      if (!realPath.startsWith(normalizedRepo + path.sep) && realPath !== normalizedRepo) {
-        return null;
-      }
+    // 1. Initial lexical path traversal check (before resolving symlinks)
+    if (!targetPath.startsWith(normalizedRepo + path.sep) && targetPath !== normalizedRepo) {
+      return null;
+    }
+
+    // 2. Resolve ALL symlinks (final component AND intermediate directories) and
+    //    enforce that the canonical path remains strictly inside the repository.
+    //    NOTE: realpath + read is not atomic; an actor with concurrent write
+    //    access to the repo could theoretically swap a symlink between the
+    //    check and the read (TOCTOU). This residual risk is accepted: anyone
+    //    with write access can already influence the gate more directly.
+    const realPath = await fs.realpath(targetPath);
+    if (!realPath.startsWith(normalizedRepo + path.sep) && realPath !== normalizedRepo) {
+      return null;
+    }
+
+    if (options.allowSymlinksWithinRepo === false && realPath !== targetPath) {
+      return null;
     }
 
     // 3. Prevent reading directories
-    const stats = await fs.stat(targetPath);
+    const stats = await fs.stat(realPath);
     if (!stats.isFile()) {
       return null;
     }
@@ -55,7 +61,7 @@ export async function safeReadRepoFile(
     // 4. File size limits
     const maxBytes = options.maxBytes ?? 2 * 1024 * 1024; // 2MB default
     if (stats.size > maxBytes) {
-      const fd = await fs.open(targetPath, 'r');
+      const fd = await fs.open(realPath, 'r');
       try {
         const buffer = Buffer.alloc(maxBytes);
         const { bytesRead } = await fd.read(buffer, 0, maxBytes, 0);
@@ -65,7 +71,7 @@ export async function safeReadRepoFile(
       }
     }
 
-    return await fs.readFile(targetPath, 'utf-8');
+    return await fs.readFile(realPath, 'utf-8');
   } catch {
     return null;
   }

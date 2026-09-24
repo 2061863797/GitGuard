@@ -89,7 +89,7 @@ export const SECRET_PATTERNS: SecretPattern[] = [
   {
     rule: 'unquoted_config_secret',
     description: 'Unquoted configuration credential',
-    regex: /\b(?:password|passwd|api_key|apikey|secret_key|auth_token|access_token|private_key)\s*:\s*([^\s"'`#,]{16,})/i,
+    regex: /\b(?:password|passwd|api_key|apikey|secret_key|auth_token|access_token|private_key)\s*[:=]\s*([^\s"'`#,]{16,})/i,
     extractGroup: 1,
   },
 ];
