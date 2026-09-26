@@ -83,11 +83,12 @@ describe('local UI server', () => {
     selectedDirectory = configured;
     const repository = await post('/api/pick-directory', {});
     expect(repository.status).toBe(200);
-    expect((await repository.json()).data).toEqual({ path: configured, repositoryRoot: configured });
+    const resolvedRepository = await fs.realpath(configured);
+    expect((await repository.json()).data).toEqual({ path: resolvedRepository, repositoryRoot: resolvedRepository });
 
     selectedDirectory = plain;
     const folder = await post('/api/pick-directory', {});
-    expect((await folder.json()).data).toEqual({ path: plain, repositoryRoot: null });
+    expect((await folder.json()).data).toEqual({ path: await fs.realpath(plain), repositoryRoot: null });
 
     selectedDirectory = null;
     const canceled = await post('/api/pick-directory', {});
