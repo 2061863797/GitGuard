@@ -70,6 +70,32 @@ deterministic:
 
 需要真实的 TypeSafe/Jev 语义判断时，先在运行环境中配置 `TYPESAFE_API_KEY`，然后去掉 `--offline`；加上 `--require-semantic` 可要求服务不可用时明确报错，而不是自动回退。
 
+## 在线检查：配置 TypeSafe API Key
+
+1. 登录 [TypeSafe 官方控制台](https://console.typesafe.ai/)，从控制台获取 API Key。
+2. 在 **启动 GitGuard 的 PowerShell 窗口**中运行下面的命令，按提示输入密钥。输入不会显示在屏幕上，也不会作为命令文字保存到历史记录：
+
+   ```powershell
+   $env:TYPESAFE_API_KEY = [System.Net.NetworkCredential]::new('', (Read-Host 'TypeSafe API Key' -AsSecureString)).Password
+   if ($env:TYPESAFE_API_KEY) { 'TypeSafe API Key 已加载' }
+   ```
+
+3. 在**同一个窗口**启动图形界面：
+
+   ```powershell
+   pnpm gitguard ui --cwd "C:\work\my-project"
+   ```
+
+使用 EXE 时，在 EXE 所在目录运行 `.\GitGuard.exe ui --cwd "C:\work\my-project"`；只使用 CLI 时，运行 `pnpm gitguard check --require-semantic --cwd "C:\work\my-project"`。
+
+图形界面的完整检查、复验和 MCP 语义工具只使用在线 TypeSafe；缺少密钥时会报错。上面的密钥只在当前 PowerShell 及其启动的子进程中生效。**不要**把密钥写入 `.gitguard.yml`、仓库文件、浏览器页面或命令行参数。
+
+若从桌面直接启动 Codex，并希望它启动 GitGuard MCP，可在已设置密钥的 PowerShell 中执行下列命令，将密钥保存为当前 Windows 用户的环境变量，然后完全退出并重新打开 Codex；同时按 [README 的 MCP 配置](../README.md#mcp-server-setup)设置 `env_vars = ["TYPESAFE_API_KEY"]`。Windows 用户环境变量会保存在用户配置中，请按自己的密钥管理要求决定是否持久保存。
+
+```powershell
+[Environment]::SetEnvironmentVariable('TYPESAFE_API_KEY', $env:TYPESAFE_API_KEY, 'User')
+```
+
 ## 4. 看结果并复查修复
 
 | 结果 | 默认退出码 | 如何处理 |
@@ -91,7 +117,7 @@ pnpm gitguard verify --offline --findings "GG-001" --cwd "C:\work\my-project"
 - **提示不是 Git 仓库**：检查 `--cwd` 是否指向含有 `.git` 的项目目录。
 - **检查结果显示 0 个文件**：检查 `git status`，以及是否误选了 `--staged` 或 `--working`。已提交的内容可用 `--target HEAD` 检查。
 - **提示找不到 pnpm、lint 或 tsc**：在目标仓库配置实际可运行的 `deterministic.test/lint/typecheck.run`，或仅关闭不适用的检查。
-- **没有 API 密钥**：先用 `check --offline`；这不会跳过本地确定性检查。
+- **没有 API 密钥**：CLI 可用 `check --offline`，这不会跳过本地确定性检查；图形界面的完整检查、复验和 MCP 语义工具需要在线密钥。
 - **想在 MCP 客户端使用**：先 `pnpm build`，再让客户端用 Node.js 启动本仓库的绝对路径 `bin/gitguard.js mcp`。具体配置见 [README 的 MCP 部分](../README.md#mcp-server-setup)。
 
 完整配置项见 [README 配置参考](../README.md#configuration-reference-gitguardyml)。

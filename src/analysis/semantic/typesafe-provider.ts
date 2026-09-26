@@ -55,6 +55,37 @@ interface TypeSafeAnswerItem {
   probabilities?: Record<string, number>;
 }
 
+function assertValidAnswer(question: SemanticQuestion, answer: unknown): asserts answer is TypeSafeAnswerItem {
+  const invalid = (reason: string): never => {
+    throw new Error(`Malformed System One answer for ${question.id}: ${reason}`);
+  };
+  if (!answer || typeof answer !== 'object' || Array.isArray(answer)) invalid('expected an object');
+  const item = answer as TypeSafeAnswerItem;
+  if (item.confidence !== undefined &&
+      (!Number.isFinite(item.confidence) || item.confidence < 0 || item.confidence > 1)) {
+    invalid('confidence must be between 0 and 1');
+  }
+  if (question.type === 'boolean') {
+    const probability = item.noul ?? item.probability;
+    if (typeof probability !== 'number' || !Number.isFinite(probability) || probability < 0 || probability > 1) {
+      invalid('probability must be between 0 and 1');
+    }
+  } else if (question.type === 'choice') {
+    const value = item.choice ?? item.value;
+    if (typeof value === 'string' && value.trim()) {
+      const choices = question.choices?.map((choice) => typeof choice === 'string' ? choice : choice.value);
+      if (choices?.length && !choices.includes(value)) invalid(`unknown choice ${value}`);
+    } else {
+      invalid('choice is missing');
+    }
+  } else {
+    const maxScore = question.levels && question.levels.length > 1 ? question.levels.length - 1 : 1;
+    if (typeof item.score !== 'number' || !Number.isFinite(item.score) || item.score < 0 || item.score > maxScore) {
+      invalid(`score must be between 0 and ${maxScore}`);
+    }
+  }
+}
+
 /**
  * Sleep helper for retry backoff.
  */
@@ -420,16 +451,24 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
 
         const effectiveModel = data.model || this.model;
 
-        // Support official answers map schema
-        if (data.answers && typeof data.answers === 'object') {
-          for (const q of questions) {
-            if (!data.answers[q.id]) {
-              throw new Error(`System One response missing answer for required question: ${q.id}`);
-            }
+        // Accept the official answers map and the legacy decisions array only when every answer is valid.
+        let answers: Record<string, TypeSafeAnswerItem>;
+        if (data.answers && typeof data.answers === 'object' && !Array.isArray(data.answers)) {
+          answers = data.answers;
+        } else if (Array.isArray(data.decisions)) {
+          answers = Object.fromEntries(data.decisions.map((decision) => [decision.id, decision]));
+        } else {
+          throw new Error('Malformed System One response: missing answers map');
+        }
+        for (const question of questions) {
+          if (!Object.hasOwn(answers, question.id)) {
+            throw new Error(`System One response missing answer for required question: ${question.id}`);
           }
+          assertValidAnswer(question, answers[question.id]);
+        }
 
-          const decisions: SemanticDecision[] = questions.map((q) => {
-            const ans = data.answers![q.id]!;
+        const decisions: SemanticDecision[] = questions.map((q) => {
+            const ans = answers[q.id]!;
             const prob = ans.noul ?? ans.probability;
             let val = ans.choice ?? ans.value;
             let score = ans.score;
@@ -461,55 +500,11 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
             };
           });
 
-          return { decisions, effectiveModel };
-        }
-
-        // Backward compatibility with decisions array if returned by mock servers
-        if (Array.isArray(data.decisions)) {
-          const resultMap = new Map(data.decisions.map((d) => [d.id, d]));
-          const decisions: SemanticDecision[] = questions.map((q) => {
-            const item = resultMap.get(q.id);
-            if (!item) {
-              return {
-                id: q.id,
-                probability: q.type === 'boolean' ? 0.5 : undefined,
-                score: q.type === 'score' ? 0.5 : undefined,
-                value: q.type === 'choice' ? 'unknown' : undefined,
-                confidence: 0.5,
-                provider: this.name,
-                rationale: 'Question omitted in provider response; defaulted',
-              };
-            }
-            let val = item.value;
-            let score = item.score;
-            const rawScore = item.score;
-            if (q.type === 'score' && typeof rawScore === 'number' && q.levels && q.levels.length > 1) {
-              const maxIdx = q.levels.length - 1;
-              score = Math.max(0, Math.min(1, rawScore / maxIdx));
-              if (!val) {
-                const roundedIdx = Math.max(0, Math.min(maxIdx, Math.round(rawScore)));
-                val = q.levels[roundedIdx]?.name;
-              }
-            }
-            return {
-              id: item.id,
-              probability: item.probability,
-              value: val,
-              score,
-              rawScore,
-              confidence: item.confidence ?? 0.9,
-              provider: this.name,
-              rationale: item.rationale,
-            };
-          });
-          return { decisions, effectiveModel };
-        }
-
-        throw new Error('Malformed System One response: missing answers map');
+        return { decisions, effectiveModel };
       } catch (err: unknown) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        // Retry transient network errors (timeouts, aborts, connection reset), skip deterministic 4xx client errors
-        const isNonRetryableClientError = /HTTP 4\d\d/.test(lastError.message);
+        // Retry transient network errors, not deterministic HTTP or response-schema errors.
+        const isNonRetryableClientError = /HTTP 4\d\d|Malformed System One|System One response missing answer/.test(lastError.message);
         if (!isNonRetryableClientError && attempt < this.maxRetries) {
           const backoff = this.retryBackoffMs * Math.pow(2, attempt);
           attempt++;

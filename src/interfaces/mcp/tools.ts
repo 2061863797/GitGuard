@@ -5,6 +5,7 @@
  */
 
 import type { GitGuardEngine } from '../../types/engine.js';
+import type { SemanticDecision } from '../../types/provider.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 /**
@@ -41,7 +42,7 @@ export const GITGUARD_MCP_TOOLS: Tool[] = [
   {
     name: 'check_task_completion',
     description:
-      'Semantic evaluation determining whether code modifications genuinely complete the specified task intent, adhere to the expected scope, and avoid unrelated modifications.',
+      'Online TypeSafe semantic evaluation of task completion and scope. Requires a TypeSafe API key; never uses local mock or fallback results.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -70,7 +71,7 @@ export const GITGUARD_MCP_TOOLS: Tool[] = [
   {
     name: 'check_before_commit',
     description:
-      'Full quality gate check before creating a git commit. Orchestrates deterministic checks (test, lint, typecheck, secrets), repository context, semantic checks, and policy rules into an authoritative gate verdict.',
+      'Full quality gate with deterministic checks and a fresh online TypeSafe semantic evaluation. Requires a TypeSafe API key; never uses local mock or fallback results.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -97,7 +98,7 @@ export const GITGUARD_MCP_TOOLS: Tool[] = [
   {
     name: 'verify_findings',
     description:
-      'Closed-loop verification tool for coding agents. After making remediation edits, the agent calls verify_findings with the IDs of previously reported findings to confirm whether they are now resolved.',
+      'Verify finding resolution using a fresh online TypeSafe evaluation. Requires a TypeSafe API key; never uses local mock or fallback results.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -125,6 +126,17 @@ export const GITGUARD_MCP_TOOLS: Tool[] = [
     },
   },
 ];
+
+function assertOnlineDecisions(decisions: Record<string, SemanticDecision>): void {
+  const values = Object.values(decisions || {});
+  if (values.length === 0 || values.some((decision) =>
+    decision.provider !== 'typesafe' ||
+    decision.metadata?.effectiveProvider !== 'typesafe' ||
+    decision.metadata.fallback
+  )) {
+    throw new Error('TypeSafe online evaluation is required; GitGuard MCP rejects local mock and fallback results.');
+  }
+}
 
 /**
  * Handles execution of MCP tool calls, delegating directly to GitGuardEngine.
@@ -189,21 +201,27 @@ export async function executeMcpTool(
           cwd,
           checkDeterministic: false,
           taskOnly: true,
+          onlineOnly: true,
+          noCache: true,
         });
 
-        const taskCompProb =
-          result.semanticDecisions?.task_completed?.probability ?? 1.0;
-        const scopeMatchProb =
-          result.semanticDecisions?.task_scope_match?.probability ?? 1.0;
-        const unrelatedProb =
-          result.semanticDecisions?.unrelated_changes?.probability ?? 0.0;
+        assertOnlineDecisions(result.semanticDecisions);
+
+        const taskCompProb = result.semanticDecisions?.task_completed?.probability;
+        const scopeMatchProb = result.semanticDecisions?.task_scope_match?.probability;
+        const unrelatedProb = result.semanticDecisions?.unrelated_changes?.probability;
+        if ([taskCompProb, scopeMatchProb, unrelatedProb].some((value) =>
+          typeof value !== 'number' || !Number.isFinite(value)
+        )) {
+          throw new Error('TypeSafe response is missing a required task-completion probability.');
+        }
 
         const decisions = Object.values(result.semanticDecisions || {});
         const firstDecision = decisions[0];
-        const effectiveProvider = firstDecision?.provider || 'mock';
-        const fallback = firstDecision?.metadata?.fallback ?? (effectiveProvider === 'mock');
-        const requestedProvider = firstDecision?.metadata?.requestedProvider || effectiveProvider;
-        const model = (result.metadata as any)?.model || firstDecision?.metadata?.effectiveModel || 'jev-latest';
+        const effectiveProvider = firstDecision?.metadata?.effectiveProvider ?? firstDecision?.provider;
+        const fallback = firstDecision?.metadata?.fallback ?? false;
+        const requestedProvider = firstDecision?.metadata?.requestedProvider ?? 'typesafe';
+        const model = firstDecision?.metadata?.effectiveModel ?? 'jev-latest';
 
         const payload = {
           status: result.status,
@@ -237,7 +255,10 @@ export async function executeMcpTool(
           task: params.task,
           scope: params.scope ?? 'staged',
           cwd,
+          onlineOnly: true,
+          noCache: true,
         });
+        assertOnlineDecisions(result.semanticDecisions);
 
         const canCommit = result.exitCode === 0;
         const deterministicMap: Record<string, string> = {};
@@ -247,10 +268,10 @@ export async function executeMcpTool(
 
         const decisions = Object.values(result.semanticDecisions || {});
         const firstDecision = decisions[0];
-        const effectiveProvider = firstDecision?.provider || 'mock';
-        const fallback = firstDecision?.metadata?.fallback ?? (effectiveProvider === 'mock');
-        const requestedProvider = firstDecision?.metadata?.requestedProvider || effectiveProvider;
-        const model = (result.metadata as any)?.model || firstDecision?.metadata?.effectiveModel || 'jev-latest';
+        const effectiveProvider = firstDecision?.metadata?.effectiveProvider ?? firstDecision?.provider;
+        const fallback = firstDecision?.metadata?.fallback ?? false;
+        const requestedProvider = firstDecision?.metadata?.requestedProvider ?? 'typesafe';
+        const model = firstDecision?.metadata?.effectiveModel ?? 'jev-latest';
 
         const payload = {
           status: result.status,
@@ -302,7 +323,10 @@ export async function executeMcpTool(
           task: params.task,
           scope: params.scope,
           cwd: params.cwd,
+          onlineOnly: true,
+          noCache: true,
         });
+        if (!report.unknownFindings?.length) assertOnlineDecisions(report.semanticDecisions);
 
         const resolved = report.resolved || report.resolvedFindings || [];
         const remaining = report.remaining || report.remainingFindings || [];

@@ -59,6 +59,8 @@ export interface CheckOptions extends InspectOptions {
   offline?: boolean;
   /** Disallow mock fallback; exit with code 2 if TypeSafe Jev is unavailable */
   requireSemantic?: boolean;
+  /** Require a fresh TypeSafe response and reject local simulation (MCP). */
+  onlineOnly?: boolean;
   /** Bypass evaluation cache in .git/gitguard/cache/ */
   noCache?: boolean;
   /** Restrict evaluation to specific finding IDs */
@@ -102,6 +104,8 @@ export interface VerifyOptions {
   config?: PolicyConfig;
   /** Force offline deterministic mock semantic provider */
   offline?: boolean;
+  /** Require a fresh TypeSafe response and reject local simulation (MCP). */
+  onlineOnly?: boolean;
   /** Bypass evaluation cache */
   noCache?: boolean;
   /** Explicitly allow custom provider endpoints beyond official TypeSafe domain */

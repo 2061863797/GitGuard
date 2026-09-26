@@ -42,6 +42,7 @@ import { loadConfig } from '../policy/config.js';
 import {
   NotAGitRepositoryError,
   ConfigurationError,
+  ProviderError,
   SecurityViolationError,
 } from '../types/errors.js';
 import { SemanticCache } from '../cache/semantic-cache.js';
@@ -389,9 +390,18 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     }
 
     // 3. Determine semantic provider with explicit configuration wiring
+    const requireOnline = options.onlineOnly === true || options.requireSemantic === true;
     const isOffline =
       options.offline ||
       config.system_one?.provider === 'mock';
+    if (requireOnline && isOffline) {
+      throw new ProviderError(
+        options.onlineOnly
+          ? 'MCP semantic checks require TypeSafe; offline or mock mode is unavailable'
+          : 'Required online semantic checks cannot use offline or mock mode',
+        'typesafe'
+      );
+    }
 
     let provider: DecisionProvider;
     if (isOffline) {
@@ -418,11 +428,17 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         baseUrl: config.system_one?.baseUrl,
         model: config.system_one?.model || 'jev-latest',
         timeoutMs: config.system_one?.timeout_ms,
-        strict: false,
+        strict: requireOnline,
         fallbackProvider: this.mockProvider,
       });
     } else {
       provider = this.typesafeProvider;
+    }
+    if (requireOnline && provider.name !== 'typesafe') {
+      throw new ProviderError(
+        options.onlineOnly ? 'MCP semantic checks require the TypeSafe provider' : 'Online semantic checks require the TypeSafe provider',
+        'typesafe'
+      );
     }
 
     // 4. Assemble semantic questions
@@ -480,7 +496,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     }
 
     // 5. Evaluate semantic questions with caching
-    const cacheEnabled = !options.noCache && config.gate?.cache?.enabled !== false;
+    const cacheEnabled = !options.noCache && !requireOnline && config.gate?.cache?.enabled !== false;
     const cacheDirOverride = config.gate?.cache?.directory;
     const cache = new SemanticCache(context.repository?.rootPath ?? cwd, cacheEnabled, cacheDirOverride);
     const rawDiffText = context.diff?.raw || '';
@@ -503,7 +519,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     let semanticDecisions: SemanticDecision[] = [];
     let cacheHit = false;
 
-    if (isCleanChangeset) {
+    if (isCleanChangeset && !requireOnline) {
       const taskPenalty = hasTask && !options.verifyMode;
       semanticDecisions = [
         {
@@ -591,6 +607,22 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
           await cache.set(cacheKey, provider.name, modelKey, semanticDecisions);
         }
       }
+    }
+
+    if (requireOnline && (
+      semanticDecisions.length === 0 ||
+      semanticDecisions.some((decision) =>
+        decision.provider !== 'typesafe' ||
+        decision.metadata?.effectiveProvider !== 'typesafe' ||
+        decision.metadata.fallback
+      )
+    )) {
+      throw new ProviderError(
+        options.onlineOnly
+          ? 'MCP rejected a missing, mock, or fallback semantic result'
+          : 'Required online semantic result is missing or used a mock or fallback provider',
+        'typesafe'
+      );
     }
 
     // Ensure security_sensitive alias is available if security_sensitive_change was evaluated
@@ -794,6 +826,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       offline: options.offline,
       noCache: options.noCache,
       strict: options.strict,
+      onlineOnly: options.onlineOnly,
       verifyMode: true,
       allowCustomProvider: options.allowCustomProvider,
     });

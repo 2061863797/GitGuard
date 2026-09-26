@@ -20,7 +20,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { GitGuardMcpServer, logDiagnostic } from '../../../src/interfaces/mcp/server.js';
 import { GITGUARD_MCP_TOOLS, executeMcpTool } from '../../../src/interfaces/mcp/tools.js';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
-import { DeterministicMockProvider } from '../../../src/analysis/semantic/mock-provider.js';
+import { createOnlineSemanticStub } from '../../helpers/online-semantic-stub.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import { FileFindingStore } from '../../../src/findings/store.js';
 
@@ -36,11 +36,7 @@ describe('Empirical Challenger M4-2: MCP Server Stress Suite', () => {
     await fixture.stage();
     await fixture.commit('feat: initial commit for mcp stress');
 
-    const mockProvider = new DeterministicMockProvider();
-    engine = new DefaultGitGuardEngine({
-      mockProvider,
-      typesafeProvider: mockProvider,
-    });
+    engine = new DefaultGitGuardEngine({ typesafeProvider: createOnlineSemanticStub() });
     mcpServer = new GitGuardMcpServer({ engine });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

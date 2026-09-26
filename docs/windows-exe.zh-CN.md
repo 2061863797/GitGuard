@@ -1,6 +1,6 @@
 # GitGuard Windows EXE 使用说明
 
-这是 Windows x64 命令行版，不是图形界面。下载后无需安装 Node.js 或 pnpm 来启动 GitGuard；仍需安装 Git 2.30+。执行目标项目配置的测试、lint 或类型检查时，还需要该项目自身的工具链。
+当前源码构建的 Windows x64 单文件版同时提供命令行和本地浏览器图形界面。已发布的 EXE 是否包含 `ui` 命令，请以该文件的 `--help` 输出为准。下载后无需安装 Node.js 或 pnpm 来启动 GitGuard；仍需安装 Git 2.30+。执行目标项目配置的测试、lint 或类型检查时，还需要该项目自身的工具链。
 
 ## 下载
 
@@ -27,4 +27,14 @@
 
 `--offline` 只让语义判断使用本地提供方。目标仓库的测试、lint 和类型检查仍按其 `.gitguard.yml` 配置执行；默认命令是 `pnpm test`、`pnpm lint` 和 `pnpm tsc --noEmit`。请先确认这些命令适用于你的项目，其他技术栈的配置示例见[快速上手](https://github.com/2061863797/GitGuard/blob/main/docs/quickstart.zh-CN.md#3-运行质量门禁)。如果选中范围没有改动，`PASS` 不代表测试已经运行。
 
-这个 EXE 也支持 `findings`、`verify` 和 `mcp` 子命令，可用 `.\GitGuard.exe <子命令> --help` 查看参数。双击 EXE 不会打开图形界面，请在终端中运行。
+## 图形界面
+
+先按[在线密钥配置教程](quickstart.zh-CN.md#在线检查配置-typesafe-api-key)在 PowerShell 中设置 `TYPESAFE_API_KEY`，再在同一窗口运行：
+
+```powershell
+.\GitGuard.exe ui --cwd "C:\work\my-project"
+```
+
+GitGuard 会打开本机浏览器。页面可切换中文和英文，通过「选择目录」浏览已配置或未配置的 Git 仓库；Windows 下还可点「用系统文件管理器选择」打开文件夹选择器，也可直接输入仓库绝对路径。未配置的仓库可创建 `.gitguard.yml`；检查命令留空时不会启用对应检查，密钥扫描仍启用。页面提供改动查看、完整检查、问题记录、复验和 MCP 启动命令。完整检查、复验和 MCP 语义工具只使用在线 TypeSafe。完整检查与复验仍会执行目标仓库配置的检查命令。浏览器界面只监听 `127.0.0.1`，关闭启动它的终端即可结束服务。
+
+这个 EXE 也支持 `findings`、`verify` 和 `mcp` 子命令，可用 `.\GitGuard.exe <子命令> --help` 查看参数。直接双击 EXE 不会打开界面，请在终端中使用 `ui` 子命令。

@@ -146,6 +146,27 @@ describe('TypeSafe System One Official API Contract', () => {
     expect(report.decisions[0].probability).toBe(0.88);
   });
 
+  it('rejects incomplete or invalid HTTP 200 answers in strict mode', async () => {
+    const cases = [
+      { question: STANDARD_QUESTIONS_MAP.task_completed, answer: {}, reason: 'probability' },
+      { question: STANDARD_QUESTIONS_MAP.task_completed, answer: { noul: 1.2 }, reason: 'probability' },
+      { question: STANDARD_QUESTIONS_MAP.task_completed, answer: { noul: Number.NaN }, reason: 'probability' },
+      { question: STANDARD_QUESTIONS_MAP.change_type, answer: { choice: 'not-a-category' }, reason: 'unknown choice' },
+      { question: STANDARD_QUESTIONS_MAP.regression_risk, answer: { score: 9 }, reason: 'score' },
+    ];
+    for (const { question, answer, reason } of cases) {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ answers: { [question.id]: answer } }),
+      });
+      const provider = new TypeSafeSystemOneProvider({
+        apiKey: 'test', strict: true, fetchFn: mockFetch as unknown as typeof fetch,
+      });
+      await expect(provider.evaluate(createDummyContext(), [question])).rejects.toThrow(reason);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it('retries on HTTP 429 and succeeds on second attempt', async () => {
     let callCount = 0;
     const mockFetch = vi.fn().mockImplementation(async () => {

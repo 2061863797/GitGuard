@@ -10,6 +10,7 @@ import { GitGuardMcpServer, logDiagnostic } from '../../../src/interfaces/mcp/se
 import { GITGUARD_MCP_TOOLS, executeMcpTool } from '../../../src/interfaces/mcp/tools.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
+import { createOnlineSemanticStub } from '../../helpers/online-semantic-stub.js';
 import { FileFindingStore } from '../../../src/findings/store.js';
 
 describe('GitGuard MCP Server & Tools', () => {
@@ -24,7 +25,7 @@ describe('GitGuard MCP Server & Tools', () => {
     await fixture.stage();
     await fixture.commit('initial commit');
 
-    engine = new DefaultGitGuardEngine();
+    engine = new DefaultGitGuardEngine({ typesafeProvider: createOnlineSemanticStub() });
     mcpServer = new GitGuardMcpServer({ engine });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

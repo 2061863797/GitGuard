@@ -4,7 +4,7 @@
 [![Windows EXE](https://github.com/2061863797/GitGuard/actions/workflows/windows-exe.yml/badge.svg)](https://github.com/2061863797/GitGuard/actions/workflows/windows-exe.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-GitGuard 检查 Git 仓库中的代码改动，提供命令行工具和 stdio MCP 服务。它汇总改动、扫描新增内容中的疑似密钥，按目标仓库配置运行测试、lint、类型检查和规则评估，最后给出 `PASS`、`WARN`、`REVIEW` 或 `BLOCK`。GitGuard 不会替你编写代码或创建提交。
+GitGuard 检查 Git 仓库中的代码改动，提供本地图形界面、命令行工具和 stdio MCP 服务。它汇总改动、扫描新增内容中的疑似密钥，按目标仓库配置运行测试、lint、类型检查和规则评估，最后给出 `PASS`、`WARN`、`REVIEW` 或 `BLOCK`。GitGuard 不会替你编写代码或创建提交。
 
 **Windows x64 用户建议先用 [GitHub Releases](https://github.com/2061863797/GitGuard/releases/latest) 中的 `GitGuard.exe`。** 同一个 EXE 可以运行 CLI 和 MCP，不需要安装 Node.js 或 pnpm 来启动 GitGuard；电脑仍需安装 Git。要从源码运行或开发本项目，再准备 Node.js 20+ 和 pnpm 9+。
 
@@ -12,6 +12,7 @@ GitGuard 检查 Git 仓库中的代码改动，提供命令行工具和 stdio MC
 
 - [Windows EXE：下载与第一次检查](#windows-exe下载与第一次检查)
 - [源码运行](#源码运行)
+- [图形界面](#图形界面)
 - [CLI：命令、范围与结果](#cli命令范围与结果)
 - [MCP Server Setup](#mcp-server-setup)
 - [Configuration Reference](#configuration-reference-gitguardyml)
@@ -38,7 +39,7 @@ $gitguard = 'C:\Tools\GitGuard\GitGuard.exe'
 
 `--offline` 让语义判断使用本地模拟提供方，不需要 API 密钥；它**不会跳过**测试、lint 或类型检查。`check` 会在目标仓库执行其 `.gitguard.yml` 中配置的命令；如果目标项目需要 Node.js、pnpm、Python 等工具链，这些工具仍须在运行环境中可用。第一次检查其他项目之前，请先看[配置说明](#configuration-reference-gitguardyml)。
 
-EXE 是命令行程序，双击不会打开图形界面。它目前未签名，Windows 可能显示安全提示；Release 提供的 `SHA256SUMS.txt` 可用于核对下载文件。更详细的操作步骤见 [Windows EXE 使用说明](docs/windows-exe.zh-CN.md)。
+当前源码构建的 EXE 可运行 `& $gitguard ui --cwd 'C:\work\my-project'`，在本机浏览器打开图形界面；直接双击 EXE 不会自动打开。GitHub Release 中已有的 EXE 是否包含此命令，以该文件的 `--help` 输出为准。它目前未签名，Windows 可能显示安全提示；Release 提供的 `SHA256SUMS.txt` 可用于核对下载文件。更详细的操作步骤见 [Windows EXE 使用说明](docs/windows-exe.zh-CN.md)。
 
 ## 源码运行
 
@@ -56,6 +57,20 @@ pnpm gitguard inspect --cwd 'C:\work\my-project'
 
 本仓库的 npm 包名是 `gitguard-verify`，CLI 命令名仍是 `gitguard`。该 npm 包尚未发布；[npm 上的 `gitguard`](https://www.npmjs.com/package/gitguard) 是另一个项目。源码操作细节见 [中文版快速上手](docs/quickstart.zh-CN.md)。
 
+## 图形界面
+
+从 EXE 启动：
+
+```powershell
+& $gitguard ui --cwd 'C:\work\my-project'
+```
+
+从源码启动：`pnpm gitguard ui --cwd 'C:\work\my-project'`。`--cwd` 是初始仓库路径，也可在页面里输入其他 Git 仓库的**绝对路径**。界面只监听本机 `127.0.0.1`，会自动打开浏览器；无法自动打开时，复制终端显示的地址。关闭启动它的终端即可结束界面服务。
+
+页面右上角可切换中文和英文。点「选择目录」可浏览文件夹，也可点「用系统文件管理器选择」打开 Windows 文件夹选择器；列表将 Git 仓库分为已配置和未配置两组。还可直接填写仓库的绝对路径。未配置仓库可点「创建配置」生成 `.gitguard.yml`，测试、代码规范和类型检查命令可选，留空即禁用对应检查；密钥扫描始终开启，已有配置不会被覆盖。
+
+界面提供改动查看、完整检查、问题记录、复验以及 MCP 启动命令；结果可查看可视化、文本和原始 JSON。完整检查和复验仅使用官方 TypeSafe 在线语义判断，每次获取新结果，不使用本地模拟或语义缓存；启动前请按[在线密钥配置教程](docs/quickstart.zh-CN.md#在线检查配置-typesafe-api-key)设置 `TYPESAFE_API_KEY`。**完整检查和复验会执行目标仓库 `.gitguard.yml` 中配置的测试、lint 和类型检查命令**。快速查看只读取改动，不代表质量门禁通过。界面不会执行 Git add、commit、push 等写入命令。
+
 ## CLI：命令、范围与结果
 
 以下示例延续上面的 PowerShell 变量 `$gitguard`。源码用户可以把 `& $gitguard` 换成 `pnpm gitguard`，并从 GitGuard 源码目录运行。
@@ -66,6 +81,7 @@ pnpm gitguard inspect --cwd 'C:\work\my-project'
 | `check` | 对改动执行配置的测试、lint、类型检查、密钥扫描和规则评估。 |
 | `findings` | 查看已记录的 finding。 |
 | `verify` | 修改代码后重新验证指定 finding。 |
+| `ui` | 在本机浏览器打开图形操作界面。 |
 | `mcp` | 通过 stdio 启动 MCP 服务，供 MCP 客户端连接。 |
 
 常用范围：
@@ -107,9 +123,10 @@ pnpm gitguard inspect --cwd 'C:\work\my-project'
 command = 'C:\Tools\GitGuard\GitGuard.exe'
 args = ["mcp"]
 cwd = 'C:\work\my-project'
+env_vars = ["TYPESAFE_API_KEY"]
 ```
 
-需要在线 TypeSafe/Jev 评估时，先在本机安全地设置 `TYPESAFE_API_KEY`，再按 Codex 的环境变量转发规则添加 `env_vars = ["TYPESAFE_API_KEY"]`；不要把密钥直接写进仓库配置。保存后重启客户端；Codex CLI 可运行 `codex mcp list` 确认服务器已配置。实际连接成功还应能看到下面列出的四个工具。
+先按[在线密钥配置教程](docs/quickstart.zh-CN.md#在线检查配置-typesafe-api-key)设置 `TYPESAFE_API_KEY`；`env_vars` 只转发环境变量名，不包含密钥值。保存后重启客户端；Codex CLI 可运行 `codex mcp list` 确认服务器已配置。实际连接成功还应能看到下面列出的四个工具。
 
 ### 使用 `mcpServers` JSON 的客户端
 
@@ -152,7 +169,7 @@ cwd = 'C:\work\my-project'
 | `check_before_commit` | `task`、`scope`、`repoPath`、`cwd` | 运行质量门禁，默认范围 **`staged`**。 |
 | `verify_findings` | 必填 `findingIds`；可选 `task`、`scope`、`cwd` | 修复后复查 finding，默认范围 `all`。 |
 
-例如，让客户端调用 `inspect_changes` 并传入 `cwd = C:\work\my-project`，可以先确认目标仓库和改动范围；再调用 `check_before_commit`，传入任务描述与同一仓库路径。`check_before_commit` 会运行目标仓库配置的检查命令。MCP 工具目前没有 CLI 的 `--offline` 参数；缺少在线密钥时，语义评估会回退到本地模拟提供方。
+例如，让客户端调用 `inspect_changes` 并传入 `cwd = C:\work\my-project`，可以先确认目标仓库和改动范围；再调用 `check_before_commit`，传入任务描述与同一仓库路径。`check_before_commit` 会运行目标仓库配置的检查命令。MCP 的 `check_task_completion`、`check_before_commit` 和 `verify_findings` 每次都要求真实的 TypeSafe 在线语义结果，不使用本地模拟或语义缓存。请确保启动 MCP 的客户端进程能读取 `TYPESAFE_API_KEY`（某些客户端需要在服务环境变量中显式传递）；缺少密钥或在线服务失败时，工具返回错误，不给出模拟结论。`inspect_changes` 只做本地只读改动检查，不调用语义提供方。
 
 `mcp` 是协议服务，不会像普通命令一样打印交互菜单；手动运行后等待输入是正常现象。`--debug` 的诊断写到 stderr，不占用 MCP 协议的 stdout。
 

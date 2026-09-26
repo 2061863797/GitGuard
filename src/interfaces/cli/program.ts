@@ -10,6 +10,7 @@ import { checkCommand } from './check.js';
 import { findingsCommand } from './findings.js';
 import { verifyCommand } from './verify.js';
 import { mcpCommand } from './mcp.js';
+import { uiCommand } from '../ui/server.js';
 
 /**
  * Builds and configures the Commander program with all GitGuard subcommands.
@@ -27,6 +28,7 @@ export function createCliProgram(): Command {
     '  gitguard inspect --cwd <repo>              Show changed files\n' +
     '  gitguard check --offline --cwd <repo>      Run local quality checks\n' +
     '  gitguard findings --cwd <repo>             List findings\n' +
+    '  gitguard ui --cwd <repo>                   Open the visual interface\n' +
     '  See README.md for installation and configuration.\n'
   );
 
@@ -121,7 +123,18 @@ export function createCliProgram(): Command {
       }
     });
 
-  // 5. mcp
+  // 5. ui
+  program
+    .command('ui')
+    .description('Open the local visual interface in a browser')
+    .option('--cwd <path>', 'Initial repository path')
+    .option('--port <number>', 'Local port (default: choose an available port)')
+    .option('--no-open', 'Print the address without opening a browser')
+    .action(async (options) => {
+      await uiCommand(options);
+    });
+
+  // 6. mcp
   program
     .command('mcp')
     .description('Launch the Model Context Protocol (MCP) server over stdio')

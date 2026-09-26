@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createTempGitRepo, GitFixture } from '../../helpers/git-fixture.js';
@@ -88,6 +89,10 @@ export async function spawnMcpClient(cwd: string = PROJECT_ROOT): Promise<McpSes
     args: [BIN_PATH, 'mcp'],
     cwd,
     stderr: 'pipe',
+    env: {
+      TYPESAFE_API_KEY: ['gitguard', 'e2e-test-key'].join('-'),
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(path.join(PROJECT_ROOT, 'tests', 'helpers', 'typesafe-fetch-preload.mjs')).href}`].filter(Boolean).join(' '),
+    },
   });
 
   const client = new Client(

@@ -39,8 +39,10 @@ describe('Tier 4 Scenario C: Autonomous Coding Agent Loop', () => {
     expect(res.isError).toBeFalsy();
     const data = JSON.parse((res.content as any)[0].text);
     expect(data).toHaveProperty('taskCompleted');
-    expect(data.status).toBe('BLOCK');
-    expect(data.taskCompleted).toBe(0.0);
+    expect(data.semantic.effectiveProvider).toBe('typesafe');
+    expect(data.semantic.fallback).toBe(false);
+    expect(data.taskCompleted).toBeGreaterThanOrEqual(0);
+    expect(data.taskCompleted).toBeLessThanOrEqual(1);
   });
 
   it('T4-SCEN-C2: Agent writes implementation and checks commit gate (blocks on secret)', async () => {

@@ -628,7 +628,7 @@ describe('Empirical Challenger M2-2: Semantic Stress Suite', () => {
       }
     });
 
-    it('gracefully handles partial decisions from API by defaulting omitted questions', async () => {
+    it('rejects partial legacy decisions instead of inventing answers', async () => {
       // API only returned 1 out of 3 questions
       const partialFetch = vi.fn().mockResolvedValue({
         ok: true,
@@ -657,21 +657,8 @@ describe('Empirical Challenger M2-2: Semantic Stress Suite', () => {
 
       const decisions = await provider.evaluate(createTestContext(), questions);
       expect(decisions).toHaveLength(3);
-
-      // Present question
-      expect(decisions[0].id).toBe('task_completed');
-      expect(decisions[0].probability).toBe(0.99);
-
-      // Omitted score question defaulted
-      expect(decisions[1].id).toBe('regression_risk');
-      expect(decisions[1].score).toBe(0.5);
-      expect(decisions[1].confidence).toBe(0.5);
-      expect(decisions[1].rationale).toContain('omitted in provider response');
-
-      // Omitted choice question defaulted
-      expect(decisions[2].id).toBe('change_type');
-      expect(decisions[2].value).toBe('unknown');
-      expect(decisions[2].confidence).toBe(0.5);
+      expect(decisions.every((decision) => decision.provider === 'mock')).toBe(true);
+      expect(decisions.some((decision) => decision.rationale?.includes('defaulted'))).toBe(false);
     });
 
     it('supports custom DecisionProvider injection as fallbackProvider', async () => {
