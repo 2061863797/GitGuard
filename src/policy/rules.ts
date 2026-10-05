@@ -508,7 +508,7 @@ export function getEffectiveBuiltinRule(
 
   const mergedThresholds: ThresholdConfig = {
     ...defaultDef.thresholds,
-    ...(userRuleConfig || {}),
+    ...userRuleConfig,
   };
 
   return {

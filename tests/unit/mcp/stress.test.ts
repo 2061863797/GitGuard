@@ -705,7 +705,7 @@ describe('Empirical Challenger M4-2: MCP Server Stress Suite', () => {
       // Fire 20 concurrent requests across all 4 tool types
       const tasks = [
         // 5 inspect_changes
-        ...Array.from({ length: 5 }).map((_, i) =>
+        ...Array.from({ length: 5 }).map(() =>
           client.callTool({
             name: 'inspect_changes',
             arguments: { cwd: fixture.path, scope: 'all' },
@@ -722,7 +722,7 @@ describe('Empirical Challenger M4-2: MCP Server Stress Suite', () => {
           })
         ),
         // 5 check_before_commit
-        ...Array.from({ length: 5 }).map((_, i) =>
+        ...Array.from({ length: 5 }).map(() =>
           client.callTool({
             name: 'check_before_commit',
             arguments: { cwd: fixture.path, scope: 'all' },

@@ -18,16 +18,11 @@ import {
   filterMatchingFiles,
   evaluateNumericalThreshold,
   evaluateScoreThreshold,
-  getEffectiveBuiltinRule,
-  evaluateSemanticRuleMatch,
-  evaluateDeterministicCheck,
-  globToRegExp,
-  DEFAULT_BUILTIN_RULES,
 } from '../../../src/policy/index.js';
-import type { PolicyConfig, CustomPolicyRule, RuleMatch, GateVerdict } from '../../../src/types/policy.js';
+import type { PolicyConfig, CustomPolicyRule, GateVerdict } from '../../../src/types/policy.js';
 import type { DeterministicResult, SemanticDecision } from '../../../src/types/provider.js';
 import type { EvaluationContext } from '../../../src/types/context.js';
-import type { FindingStatus, FindingSeverity } from '../../../src/types/finding.js';
+import type { FindingStatus } from '../../../src/types/finding.js';
 
 describe('Empirical Challenger M3-1: Policy Engine Stress Suite', () => {
   // =========================================================================

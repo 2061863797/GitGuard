@@ -6,6 +6,7 @@
  */
 
 import * as crypto from 'node:crypto';
+import * as path from 'node:path';
 import type {
   GitGuardEngine,
   InspectOptions,
@@ -23,9 +24,9 @@ import type {
   SemanticDecision,
   SemanticQuestion,
 } from '../types/provider.js';
-import type { GitAdapter, ChangeScope, DiffOptions } from '../types/git.js';
+import type { GitAdapter, DiffOptions } from '../types/git.js';
 import type { DiffSummary } from '../types/diff.js';
-import type { ContextBuilder, EvaluationContext } from '../types/context.js';
+import type { ContextBuilder } from '../types/context.js';
 import type { PolicyEngine } from '../types/policy.js';
 import type { FindingManager } from '../types/finding.js';
 import { GitCLIAdapter } from '../git/adapter.js';
@@ -44,9 +45,15 @@ import {
   ConfigurationError,
   ProviderError,
   SecurityViolationError,
+  InvalidGitRefError,
 } from '../types/errors.js';
 import { SemanticCache } from '../cache/semantic-cache.js';
 import { scanContentForSecrets, SECRET_PATTERNS, validateCustomSecretPattern, type SecretPattern } from '../analysis/deterministic/secrets.js';
+
+function normalizeRepositoryRoot(root: string): string {
+  const resolved = path.resolve(root);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
 
 /**
  * Dependency injection options for DefaultGitGuardEngine.
@@ -135,14 +142,13 @@ function buildDiffOptions(target?: string, cwd?: string): DiffOptions {
   const opts: DiffOptions = { cwd };
   if (!target) return opts;
 
-  if (target.includes('...')) {
-    const [base, head] = target.split('...');
-    opts.baseRef = base;
-    opts.headRef = head;
-  } else if (target.includes('..')) {
-    const [base, head] = target.split('..');
-    opts.baseRef = base;
-    opts.headRef = head;
+  if (target.includes('..')) {
+    const refs = target.split(/\.\.\.?/);
+    if (target.includes('....') || refs.length !== 2 || refs.some((ref) => !ref.trim() || ref.includes('..'))) {
+      throw new InvalidGitRefError(target);
+    }
+    // Preserve Git's distinction between endpoint and merge-base comparisons.
+    opts.baseRef = target;
   } else {
     opts.commitSha = target;
   }
@@ -198,7 +204,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     }
 
     const config = await this.resolveConfig(cwd, options.config, options.configPath);
-    const scope = options.scope ?? 'all';
+    const scope = options.scope ?? (options.target ? options.target.includes('..') ? 'range' : 'commit' : 'all');
     const diffOpts = buildDiffOptions(options.target, cwd);
 
     const rawDiff = await this.gitAdapter.getDiff(scope, diffOpts);
@@ -739,6 +745,10 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     const unknownFindings: string[] = [];
     let allStored: Finding[] = [];
 
+    const matchesCurrentRepository = (finding: Finding): boolean =>
+      !!finding.provenance?.repositoryRoot &&
+      normalizeRepositoryRoot(finding.provenance.repositoryRoot) === normalizeRepositoryRoot(repoRoot);
+
     if (options.findingIds && options.findingIds.length > 0) {
       try {
         const store = new FileFindingStore(repoRoot);
@@ -747,6 +757,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         console.error(
           `[gitguard] WARNING: failed to read findings from the repository store: ${(err as Error)?.message ?? err}`
         );
+        throw err;
       }
       if (allStored.length === 0) {
         if (typeof (this.findingManager as any).loadPersistentFindings === 'function') {
@@ -754,6 +765,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         } else if (this.findingManager.getFindings) {
           allStored = this.findingManager.getFindings();
         }
+        allStored = allStored.filter(matchesCurrentRepository);
       }
       storedMap = new Map<string, Finding>(allStored.map((f: Finding) => [f.id, f]));
 
@@ -769,23 +781,25 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       // Early short-circuit if any targeted finding IDs are unknown:
       // Do not waste resources on subcommands or remote API calls!
       if (unknownFindings.length > 0) {
+        const pendingFindings = previousFindings.filter((finding) => finding.lifecycle === 'active');
+        const pendingIds = pendingFindings.map((finding) => finding.id);
         const summary = previousFindings.length === 0
-          ? `Verification failed: None of the targeted finding ID(s) exist in repository store or history: [${unknownFindings.join(', ')}].`
-          : `Verification failed: None of the targeted finding ID(s) exist in repository store or history: [${unknownFindings.join(', ')}].`;
+          ? `Verification failed: None of the targeted finding ID(s) exist in this repository: [${unknownFindings.join(', ')}].`
+          : `Verification failed: Some targeted finding ID(s) are unknown in this repository: [${unknownFindings.join(', ')}].`;
         return {
           status: 'BLOCK',
           verdictSummary: summary,
           task: undefined,
           diffSummary: { filesChanged: 0, insertions: 0, deletions: 0, hasBinaryChanges: false, truncated: false },
-          findings: [],
+          findings: pendingFindings,
           resolved: [],
-          remaining: [],
+          remaining: pendingIds,
           unknownFindings,
           targetsResolved: false,
           allResolved: false,
           newFindings: [],
           resolvedFindings: [],
-          remainingFindings: [],
+          remainingFindings: pendingIds,
           deterministicResults: [],
           semanticDecisions: {},
           metadata: {
@@ -806,6 +820,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         console.error(
           `[gitguard] WARNING: failed to read findings from the repository store: ${(err as Error)?.message ?? err}`
         );
+        throw err;
       }
       if (activeStored.length > 0) {
         previousFindings = activeStored;
@@ -813,13 +828,15 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         previousFindings = this.findingManager.getFindings
           ? this.findingManager.getFindings({ lifecycle: 'active' })
           : [];
+        previousFindings = previousFindings.filter(matchesCurrentRepository);
       }
     }
 
     // 2. Run fresh check on the repository
     const freshCheck = await this.check({
       cwd,
-      scope: options.scope ?? 'all',
+      scope: options.scope,
+      target: options.target,
       task: options.task,
       config: options.config,
       configPath: options.configPath,
@@ -840,7 +857,6 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
 
     // Baseline Drift and committed violation verification:
     // Ensure findings were not falsely marked as resolved merely because the offending code was committed into HEAD.
-    const currentHeadSha = await this.gitAdapter.getHeadSha(repoRoot);
     const validatedResolved: string[] = [];
     const revivedFindings: Finding[] = [];
     const previousMap = new Map<string, Finding>(basePrevious.map((f) => [f.id, f]));
@@ -1022,6 +1038,11 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     report.metadata = freshCheck.metadata;
     if (verifyPersistenceOk !== undefined) {
       report.metadata.persistenceOk = verifyPersistenceOk;
+    }
+    if (verifyPersistenceOk === false) {
+      report.status = 'BLOCK';
+      report.allResolved = false;
+      report.verdictSummary = 'Verification state could not be persisted. Check repository write access and retry verification.';
     }
 
     return report;

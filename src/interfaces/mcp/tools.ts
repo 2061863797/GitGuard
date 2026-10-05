@@ -1,388 +1,264 @@
 /**
- * src/interfaces/mcp/tools.ts
- * MCP Tool definitions, JSON schemas, and execution handlers for GitGuard.
- * Strictly delegates to GitGuardEngine.
+ * MCP tool contracts and execution handlers for GitGuard.
  */
-
+import * as path from 'node:path';
+import { z } from 'zod';
+import type { CallToolResult, TextContent, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { GitGuardEngine } from '../../types/engine.js';
+import { DefaultGitGuardEngine } from '../../core/engine.js';
+import type { ChangeScope } from '../../types/git.js';
 import type { SemanticDecision } from '../../types/provider.js';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { redactSecrets } from '../../context/filter.js';
 
-/**
- * Metadata and JSON schemas for the 4 GitGuard MCP tools.
- */
-export const GITGUARD_MCP_TOOLS: Tool[] = [
-  {
-    name: 'inspect_changes',
-    description:
-      'Quickly inspect current repository code changes, file modifications, diff statistics, and initial findings without modifying repository state.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        scope: {
-          type: 'string',
-          enum: ['staged', 'working', 'all', 'commit', 'range'],
-          description: "Git change scope to inspect. Default: 'all'.",
-        },
-        target: {
-          type: 'string',
-          description: 'Target commit hash, branch name, or diff range (e.g. HEAD~1..HEAD).',
-        },
-        task: {
-          type: 'string',
-          description: 'Optional natural language description of task intent.',
-        },
-        cwd: {
-          type: 'string',
-          description: 'Repository working directory path.',
-        },
-      },
-    },
+const changeScope = z.enum(['staged', 'working', 'all', 'commit', 'range']);
+const text = z.string().trim().min(1);
+const repositoryFields = {
+  cwd: text.describe('Repository working directory; defaults to the server working directory.').optional(),
+  repoPath: text.describe('Alias for cwd. If both are supplied they must resolve to the same path.').optional(),
+};
+const taskField = text.describe('Natural language task intent.');
+const targetField = text.describe('Commit or complete base..head / base...head range. Required for commit/range; infers scope when omitted.').optional();
+
+const INPUT_SCHEMAS = {
+  inspect_changes: z.strictObject({
+    ...repositoryFields,
+    scope: changeScope.describe('Default: all; a target infers commit/range.').optional(),
+    target: targetField,
+    task: taskField.optional(),
+  }),
+  check_task_completion: z.strictObject({
+    ...repositoryFields,
+    task: taskField,
+    scope: changeScope.describe('Default: all; a target infers commit/range.').optional(),
+    target: targetField,
+  }),
+  check_before_commit: z.strictObject({
+    ...repositoryFields,
+    task: taskField.optional(),
+    scope: z.enum(['staged', 'working', 'all']).describe('Default: staged.').optional(),
+  }),
+  verify_findings: z.strictObject({
+    ...repositoryFields,
+    findingIds: z.array(text).min(1).describe('Non-empty finding IDs previously recorded in this repository.'),
+    task: taskField.optional(),
+    scope: changeScope.describe('Default: all; a target infers commit/range.').optional(),
+    target: targetField,
+  }),
+};
+
+type ToolName = keyof typeof INPUT_SCHEMAS;
+
+const TOOL_METADATA: Record<ToolName, Pick<Tool, 'description' | 'annotations'>> = {
+  inspect_changes: {
+    description: 'Inspect changed files and diff statistics locally. Does not run project checks, scan secrets, contact a provider, or persist findings.',
+    annotations: { readOnlyHint: true, openWorldHint: false },
   },
-  {
-    name: 'check_task_completion',
-    description:
-      'Online TypeSafe semantic evaluation of task completion and scope. Requires a TypeSafe API key; never uses local mock or fallback results.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: {
-          type: 'string',
-          description:
-            'The natural language requirement or task statement that must be verified.',
-        },
-        scope: {
-          type: 'string',
-          enum: ['staged', 'working', 'all', 'commit', 'range'],
-          description: "Git change scope to evaluate. Default: 'all'.",
-        },
-        repoPath: {
-          type: 'string',
-          description: 'Optional path to target repository root.',
-        },
-        cwd: {
-          type: 'string',
-          description: 'Optional working directory path.',
-        },
-      },
-      required: ['task'],
-    },
+  check_task_completion: {
+    description: 'Evaluate task completion, scope match and unrelated changes with a fresh online TypeSafe response. Does not run project checks; may persist findings. Requires a TypeSafe key and rejects mock/fallback results.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
-  {
-    name: 'check_before_commit',
-    description:
-      'Full quality gate with deterministic checks and a fresh online TypeSafe semantic evaluation. Requires a TypeSafe API key; never uses local mock or fallback results.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task: {
-          type: 'string',
-          description: 'Optional task intent describing the changes being committed.',
-        },
-        scope: {
-          type: 'string',
-          enum: ['staged', 'working', 'all'],
-          description: "Git change scope to evaluate. Default: 'staged'.",
-        },
-        repoPath: {
-          type: 'string',
-          description: 'Optional repository path.',
-        },
-        cwd: {
-          type: 'string',
-          description: 'Optional working directory path.',
-        },
-      },
-    },
+  check_before_commit: {
+    description: 'Run the quality gate on staged changes by default. Executes trusted repository test/lint/typecheck commands which may write files, persists findings, and requires fresh online TypeSafe results.',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
-  {
-    name: 'verify_findings',
-    description:
-      'Verify finding resolution using a fresh online TypeSafe evaluation. Requires a TypeSafe API key; never uses local mock or fallback results.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        findingIds: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            'Array of finding IDs that the agent has attempted to resolve.',
-        },
-        task: {
-          type: 'string',
-          description: 'Optional task context.',
-        },
-        scope: {
-          type: 'string',
-          enum: ['staged', 'working', 'all', 'commit', 'range'],
-          description: "Git change scope to evaluate during verification. Default: 'all'.",
-        },
-        cwd: {
-          type: 'string',
-          description: 'Optional working directory path.',
-        },
-      },
-      required: ['findingIds'],
-    },
+  verify_findings: {
+    description: 'Recheck finding IDs in this repository. Known IDs run project checks and fresh online TypeSafe evaluation and update finding state; unknown IDs return BLOCK before checks or online calls.',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
-];
+};
+
+/** Runtime validation and advertised schemas use the same definitions. */
+export const GITGUARD_MCP_TOOLS: Tool[] = (Object.keys(INPUT_SCHEMAS) as ToolName[]).map((name) => ({
+  name,
+  ...TOOL_METADATA[name],
+  inputSchema: z.toJSONSchema(INPUT_SCHEMAS[name]) as Tool['inputSchema'],
+}));
+
+export interface McpToolResult extends CallToolResult {
+  content: TextContent[];
+}
+
+interface ToolParameters {
+  task?: string;
+  scope?: ChangeScope;
+  target?: string;
+  cwd?: string;
+  repoPath?: string;
+  findingIds?: string[];
+}
+
+function normalizeIds(value: unknown): unknown {
+  const ids = typeof value === 'string' ? value.split(',') : value;
+  return Array.isArray(ids)
+    ? [...new Set(ids.map((id) => typeof id === 'string' ? id.trim() : id))]
+    : ids;
+}
+
+function parseArguments(name: ToolName, args: unknown): ToolParameters {
+  if (args !== undefined && (!args || typeof args !== 'object' || Array.isArray(args))) {
+    throw new Error('Tool arguments must be an object.');
+  }
+  const input: Record<string, unknown> = { ...(args as Record<string, unknown> | undefined) };
+  if (name === 'check_task_completion' && (typeof input.task !== 'string' || !input.task.trim())) {
+    throw new Error("Missing required parameter 'task' for check_task_completion");
+  }
+  if (name === 'verify_findings') {
+    const canonical = normalizeIds(input.findingIds);
+    const alias = normalizeIds(input.findings);
+    if (canonical !== undefined && canonical !== null && alias !== undefined &&
+        JSON.stringify(canonical) !== JSON.stringify(alias)) {
+      throw new Error("Conflicting 'findingIds' and legacy 'findings' parameters.");
+    }
+    input.findingIds = canonical ?? alias;
+    delete input.findings;
+    if (input.findingIds == null || (Array.isArray(input.findingIds) && input.findingIds.length === 0)) {
+      throw new Error("Missing or empty required parameter 'findingIds' for verify_findings");
+    }
+  }
+  const parsed = INPUT_SCHEMAS[name].safeParse(input);
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues.map((issue) =>
+      (issue.path.join('.') || 'arguments') + ': ' + issue.message
+    ).join('; '));
+  }
+  const params: ToolParameters = parsed.data;
+  if (params.cwd && params.repoPath) {
+    const normalizePath = (value: string) => {
+      const resolved = path.resolve(value);
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    };
+    if (normalizePath(params.cwd) !== normalizePath(params.repoPath)) {
+      throw new Error("Conflicting 'cwd' and 'repoPath'; supply one repository path.");
+    }
+  }
+  params.cwd = params.repoPath ?? params.cwd;
+  const inferredScope = params.target?.includes('..') ? 'range' : 'commit';
+  params.scope ??= params.target ? inferredScope : name === 'check_before_commit' ? 'staged' : 'all';
+  if (params.scope === 'commit' || params.scope === 'range') {
+    if (!params.target) throw new Error("Scope '" + params.scope + "' requires a target.");
+  }
+  if (params.target) {
+    if (params.scope !== inferredScope) throw new Error('Target does not match the selected scope.');
+    const refs = params.target.split(/\.\.\.?/);
+    if ((inferredScope === 'range' && (refs.length !== 2 || params.target.includes('....'))) ||
+        refs.some((ref) => !ref || ref.startsWith('-') || /\s/.test(ref) ||
+          [...ref].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))) {
+      throw new Error('Target must be a commit reference or a complete base..head / base...head range.');
+    }
+  }
+  return params;
+}
+
+function redactToolData(value: unknown): unknown {
+  if (typeof value === 'string') return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactToolData);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactToolData(child)]));
+  }
+  return value;
+}
+
+function toolResult(payload: Record<string, unknown>): McpToolResult {
+  const structuredContent = redactToolData(payload) as Record<string, unknown>;
+  return { structuredContent, content: [{ type: 'text', text: JSON.stringify(structuredContent, null, 2) }] };
+}
+
+function toolError(code: string, message: string): McpToolResult {
+  const safeMessage = redactSecrets(message);
+  return { isError: true, structuredContent: { error: { code, message: safeMessage } },
+    content: [{ type: 'text', text: safeMessage }] };
+}
 
 function assertOnlineDecisions(decisions: Record<string, SemanticDecision>): void {
   const values = Object.values(decisions || {});
   if (values.length === 0 || values.some((decision) =>
-    decision.provider !== 'typesafe' ||
-    decision.metadata?.effectiveProvider !== 'typesafe' ||
-    decision.metadata.fallback
+    decision.provider !== 'typesafe' || decision.metadata?.effectiveProvider !== 'typesafe' || decision.metadata.fallback
   )) {
     throw new Error('TypeSafe online evaluation is required; GitGuard MCP rejects local mock and fallback results.');
   }
 }
 
-/**
- * Handles execution of MCP tool calls, delegating directly to GitGuardEngine.
- */
-export async function executeMcpTool(
-  name: string,
-  args: Record<string, any> | undefined,
-  engine: GitGuardEngine
-): Promise<{ isError?: boolean; content: Array<{ type: 'text'; text: string }> }> {
-  try {
-    const params = args || {};
+function semanticSummary(decisions: Record<string, SemanticDecision>) {
+  const first = Object.values(decisions)[0];
+  return {
+    requestedProvider: first?.metadata?.requestedProvider ?? 'typesafe',
+    effectiveProvider: first?.metadata?.effectiveProvider ?? first?.provider,
+    fallback: first?.metadata?.fallback ?? false,
+    model: first?.metadata?.effectiveModel ?? null,
+  };
+}
 
+/** Invalid arguments never reach repository commands or online providers. */
+export async function executeMcpTool(name: string, args: unknown, engine: GitGuardEngine = new DefaultGitGuardEngine()): Promise<McpToolResult> {
+  if (!Object.hasOwn(INPUT_SCHEMAS, name)) return toolError('UNKNOWN_TOOL', 'Unknown tool name: "' + name + '"');
+  let params: ToolParameters;
+  try {
+    params = parseArguments(name as ToolName, args);
+  } catch (error: unknown) {
+    return toolError('INVALID_ARGUMENTS', 'Invalid arguments for ' + name + ': ' + (error instanceof Error ? error.message : String(error)));
+  }
+  try {
     switch (name) {
       case 'inspect_changes': {
-        const result = await engine.inspect({
-          scope: params.scope,
-          target: params.target,
-          task: params.task,
-          cwd: params.cwd,
+        const result = await engine.inspect({ scope: params.scope, target: params.target, task: params.task, cwd: params.cwd });
+        return toolResult({
+          status: result.status, verdict: result.status, scope: params.scope, summary: result.summary,
+          files: result.changedFiles.map((file) => ({ path: file.path || file.oldPath, status: file.status, insertions: file.additions, deletions: file.deletions })),
+          findings: result.findings, hasDeterministicFailures: result.hasDeterministicFailures,
         });
-
-        const payload = {
-          status: result.status,
-          summary: result.summary,
-          files: result.changedFiles.map((f) => ({
-            path: f.path || f.oldPath,
-            status: f.status,
-            insertions: f.additions,
-            deletions: f.deletions,
-          })),
-          findings: result.findings,
-          hasDeterministicFailures: result.hasDeterministicFailures,
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(payload, null, 2),
-            },
-          ],
-        };
       }
-
       case 'check_task_completion': {
-        if (!params.task || typeof params.task !== 'string') {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: "Missing required parameter 'task' for check_task_completion",
-              },
-            ],
-          };
-        }
-
-        const cwd = params.repoPath || params.cwd;
         const result = await engine.check({
-          task: params.task,
-          scope: params.scope ?? 'all',
-          cwd,
-          checkDeterministic: false,
-          taskOnly: true,
-          onlineOnly: true,
-          noCache: true,
+          task: params.task, scope: params.scope, target: params.target, cwd: params.cwd,
+          checkDeterministic: false, taskOnly: true, onlineOnly: true, noCache: true,
         });
-
         assertOnlineDecisions(result.semanticDecisions);
-
-        const taskCompProb = result.semanticDecisions?.task_completed?.probability;
-        const scopeMatchProb = result.semanticDecisions?.task_scope_match?.probability;
-        const unrelatedProb = result.semanticDecisions?.unrelated_changes?.probability;
-        if ([taskCompProb, scopeMatchProb, unrelatedProb].some((value) =>
-          typeof value !== 'number' || !Number.isFinite(value)
-        )) {
-          throw new Error('TypeSafe response is missing a required task-completion probability.');
-        }
-
-        const decisions = Object.values(result.semanticDecisions || {});
-        const firstDecision = decisions[0];
-        const effectiveProvider = firstDecision?.metadata?.effectiveProvider ?? firstDecision?.provider;
-        const fallback = firstDecision?.metadata?.fallback ?? false;
-        const requestedProvider = firstDecision?.metadata?.requestedProvider ?? 'typesafe';
-        const model = firstDecision?.metadata?.effectiveModel ?? 'jev-latest';
-
-        const payload = {
-          status: result.status,
-          verdict: result.status,
-          taskCompleted: taskCompProb,
-          taskScopeMatch: scopeMatchProb,
-          unrelatedChanges: unrelatedProb,
-          semantic: {
-            requestedProvider,
-            effectiveProvider,
-            fallback,
-            model,
-          },
-          findings: result.findings,
-          summary: result.verdictSummary,
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(payload, null, 2),
-            },
-          ],
-        };
+        const taskCompleted = result.semanticDecisions.task_completed?.probability;
+        const taskScopeMatch = result.semanticDecisions.task_scope_match?.probability;
+        const unrelatedChanges = result.semanticDecisions.unrelated_changes?.probability;
+        if ([taskCompleted, taskScopeMatch, unrelatedChanges].some((value) =>
+          typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1
+        )) throw new Error('TypeSafe response is missing a required task-completion probability or it is outside [0, 1].');
+        return toolResult({
+          status: result.status, verdict: result.status, taskCompleted, taskScopeMatch, unrelatedChanges,
+          semantic: semanticSummary(result.semanticDecisions), findings: result.findings, summary: result.verdictSummary,
+          diffSummary: result.diffSummary, metadata: result.metadata,
+        });
       }
-
       case 'check_before_commit': {
-        const cwd = params.repoPath || params.cwd;
         const result = await engine.check({
-          task: params.task,
-          scope: params.scope ?? 'staged',
-          cwd,
-          onlineOnly: true,
-          noCache: true,
+          task: params.task, scope: params.scope, cwd: params.cwd, onlineOnly: true, noCache: true,
         });
         assertOnlineDecisions(result.semanticDecisions);
-
-        const canCommit = result.exitCode === 0;
-        const deterministicMap: Record<string, string> = {};
-        for (const det of result.deterministicResults || []) {
-          deterministicMap[det.id] = det.status;
-        }
-
-        const decisions = Object.values(result.semanticDecisions || {});
-        const firstDecision = decisions[0];
-        const effectiveProvider = firstDecision?.metadata?.effectiveProvider ?? firstDecision?.provider;
-        const fallback = firstDecision?.metadata?.fallback ?? false;
-        const requestedProvider = firstDecision?.metadata?.requestedProvider ?? 'typesafe';
-        const model = firstDecision?.metadata?.effectiveModel ?? 'jev-latest';
-
-        const payload = {
-          status: result.status,
-          verdict: result.status,
-          canCommit,
-          deterministic: deterministicMap,
-          semantic: {
-            requestedProvider,
-            effectiveProvider,
-            fallback,
-            model,
-          },
-          findings: result.findings,
-          summary: result.verdictSummary,
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(payload, null, 2),
-            },
-          ],
-        };
+        return toolResult({
+          status: result.status, verdict: result.status, canCommit: result.status !== 'BLOCK' && result.exitCode === 0,
+          deterministic: Object.fromEntries((result.deterministicResults || []).map((check) => [check.id, check.status])),
+          semantic: semanticSummary(result.semanticDecisions), findings: result.findings, summary: result.verdictSummary,
+          diffSummary: result.diffSummary, metadata: result.metadata,
+        });
       }
-
       case 'verify_findings': {
-        const rawIds = params.findingIds || params.findings;
-        const findingIds = Array.isArray(rawIds)
-          ? rawIds
-          : typeof rawIds === 'string'
-          ? rawIds.split(',').map((s) => s.trim())
-          : [];
-
-        if (findingIds.length === 0) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: "Missing or empty required parameter 'findingIds' for verify_findings",
-              },
-            ],
-          };
-        }
-
         const report = await engine.verify({
-          findingIds,
-          task: params.task,
-          scope: params.scope,
-          cwd: params.cwd,
-          onlineOnly: true,
-          noCache: true,
+          findingIds: params.findingIds, task: params.task, scope: params.scope, target: params.target, cwd: params.cwd,
+          onlineOnly: true, noCache: true,
         });
         if (!report.unknownFindings?.length) assertOnlineDecisions(report.semanticDecisions);
-
         const resolved = report.resolved || report.resolvedFindings || [];
         const remaining = report.remaining || report.remainingFindings || [];
         const unknownFindings = report.unknownFindings || [];
         const newFindings = report.newFindings || [];
         const targetsResolved = report.targetsResolved ?? (report.status === 'PASS' && remaining.length === 0 && unknownFindings.length === 0);
         const allResolved = report.allResolved ?? (targetsResolved && newFindings.length === 0);
-
-        const payload = {
-          status: report.status,
-          verdict: report.status,
-          targetsResolved,
-          allResolved,
-          resolved,
-          remaining,
-          unknownFindings,
-          newFindings: newFindings.map((f) => ({
-            id: f.id,
-            ruleId: f.ruleId,
-            status: f.status,
-            severity: f.severity,
-            message: f.message,
-          })),
-          summary: report.verdictSummary,
-        };
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(payload, null, 2),
-            },
-          ],
-        };
+        return toolResult({
+          status: report.status, verdict: report.status, targetsResolved, allResolved, resolved, remaining, unknownFindings,
+          newFindings: newFindings.map((finding) => ({ id: finding.id, ruleId: finding.ruleId, status: finding.status, severity: finding.severity, message: finding.message })),
+          summary: report.verdictSummary, diffSummary: report.diffSummary, metadata: report.metadata,
+        });
       }
-
       default:
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `Unknown tool name: "${name}"`,
-            },
-          ],
-        };
+        return toolError('UNKNOWN_TOOL', 'Unknown tool name: "' + name + '"');
     }
-  } catch (err: any) {
-    return {
-      isError: true,
-      content: [
-        {
-          type: 'text',
-          text: `Tool execution failed (${name}): ${err.message || String(err)}`,
-        },
-      ],
-    };
+  } catch (error: unknown) {
+    return toolError('TOOL_EXECUTION_FAILED', 'Tool execution failed (' + name + '): ' + (error instanceof Error ? error.message : String(error)));
   }
 }

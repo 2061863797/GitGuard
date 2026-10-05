@@ -13,62 +13,32 @@ import {
   BudgetExceededError,
   type ChangeScope,
   type FileChangeStatus,
-  type GitFileStatus,
   type ChangedFile,
   type GitStatusSummary,
-  type GitStatus,
   type DiffOptions,
   type GitAdapter,
-  type IGitAdapter,
   type DiffLineType,
-  type DiffLine,
-  type DiffHunk,
-  type DiffFile,
-  type DiffSummary,
   type DiffContext,
-  type DiffParser,
-  type TaskSource,
   type TaskContext,
-  type SurroundingCodeSpan,
   type FileContext,
   type InstructionContext,
   type TestContext,
-  type RepositoryMetadata,
   type RepositoryContext,
-  type ContextBudgetOptions,
-  type PrivacyOptions,
   type ContextBuildOptions,
   type EvaluationContext,
   type ContextBuilder,
-  type DeterministicCheckId,
-  type DeterministicStatus,
-  type DeterministicCheckStatus,
-  type DeterministicViolation,
   type DeterministicResult,
-  type DeterministicEvidence,
-  type CommandDefinition,
   type DeterministicConfig,
   type DeterministicChecker,
-  type DeterministicRunner,
-  type SemanticQuestionType,
-  type SemanticPrimitive,
-  type SemanticQuestionChoice,
-  type SemanticQuestionLevel,
   type StandardQuestionId,
   type SemanticQuestion,
   type SemanticDecision,
-  type SemanticResult,
   type DecisionProvider,
-  type IDecisionProvider,
   type FindingSeverity,
   type FindingStatus,
-  type FindingSource,
   type FindingLifecycleState,
-  type EvidenceType,
-  type Evidence,
   type Finding,
   type FindingFilter,
-  type VerificationReportMetadata,
   type VerificationReport,
   type FindingFingerprintInput,
   type FindingManager,
@@ -78,13 +48,6 @@ import {
   type ThresholdConfig,
   type PolicyRule,
   type CustomPolicyRule,
-  type ContextBudgetConfig,
-  type SystemOneConfig,
-  type DeterministicCheckConfig,
-  type DeterministicSecretScanConfig,
-  type DeterministicPolicyConfig,
-  type BuiltinRulesConfig,
-  type PrivacyConfig,
   type PolicyConfig,
   type RuleMatch,
   type PolicyEvaluationResult,
@@ -535,7 +498,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
   describe('5. Component Interface Contract Soundness', () => {
     it('should implement GitGuardEngine interface without compilation error', async () => {
       class MockGitGuardEngine implements GitGuardEngine {
-        async inspect(options: InspectOptions): Promise<InspectResult> {
+        async inspect(_options: InspectOptions): Promise<InspectResult> {
           return {
             status: 'PASS',
             summary: { filesChanged: 0, insertions: 0, deletions: 0 },
@@ -545,7 +508,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
           };
         }
 
-        async check(options: CheckOptions): Promise<CheckResult> {
+        async check(_options: CheckOptions): Promise<CheckResult> {
           return {
             status: 'PASS',
             verdictSummary: 'All checks passed',
@@ -586,7 +549,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
           };
         }
 
-        async getFindings(filter?: FindingFilter): Promise<Finding[]> {
+        async getFindings(_filter?: FindingFilter): Promise<Finding[]> {
           return [];
         }
       }
@@ -635,7 +598,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
 
     it('should implement DeterministicChecker cleanly', async () => {
       class MockDeterministicChecker implements DeterministicChecker {
-        async run(context: EvaluationContext, config: DeterministicConfig): Promise<DeterministicResult[]> {
+        async run(_context: EvaluationContext, _config: DeterministicConfig): Promise<DeterministicResult[]> {
           return [
             {
               id: 'test',
@@ -680,10 +643,10 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
     it('should implement PolicyEngine cleanly', () => {
       class MockPolicyEngine implements PolicyEngine {
         evaluate(
-          deterministicResults: DeterministicResult[],
-          semanticDecisions: SemanticDecision[],
-          policy: PolicyConfig,
-          context: EvaluationContext
+          _deterministicResults: DeterministicResult[],
+          _semanticDecisions: SemanticDecision[],
+          _policy: PolicyConfig,
+          _context: EvaluationContext
         ): PolicyEvaluationResult {
           return {
             verdict: 'PASS',
@@ -703,9 +666,9 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
 
     it('should test GitAdapter implementation against PROJECT.md signature', async () => {
       class ProjectContractGitAdapter implements GitAdapter {
-        async isGitRepository(cwd?: string): Promise<boolean> { return true; }
-        async getRepositoryRoot(cwd?: string): Promise<string> { return '/test'; }
-        async getStatus(cwd?: string): Promise<GitStatusSummary> {
+        async isGitRepository(_cwd?: string): Promise<boolean> { return true; }
+        async getRepositoryRoot(_cwd?: string): Promise<string> { return '/test'; }
+        async getStatus(_cwd?: string): Promise<GitStatusSummary> {
           return {
             isRepo: true,
             rootPath: '/test',
@@ -717,18 +680,18 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
             untrackedFiles: [],
           };
         }
-        async getCurrentBranch(cwd?: string): Promise<string> { return 'main'; }
-        async getHeadSha(cwd?: string): Promise<string> { return '123'; }
-        async getDiff(scope: ChangeScope, options?: DiffOptions): Promise<string> { return ''; }
-        async getStagedDiff(cwd?: string): Promise<string> { return ''; }
-        async getWorkingTreeDiff(cwd?: string): Promise<string> { return ''; }
+        async getCurrentBranch(_cwd?: string): Promise<string> { return 'main'; }
+        async getHeadSha(_cwd?: string): Promise<string> { return '123'; }
+        async getDiff(_scope: ChangeScope, _options?: DiffOptions): Promise<string> { return ''; }
+        async getStagedDiff(_cwd?: string): Promise<string> { return ''; }
+        async getWorkingTreeDiff(_cwd?: string): Promise<string> { return ''; }
         async getChangedFiles(scope?: ChangeScope, options?: DiffOptions | string): Promise<ChangedFile[]> {
           if (typeof options === 'string') {
             return [{ path: 'foo.ts', status: 'modified', additions: 1, deletions: 0 }];
           }
           return [];
         }
-        async getFileContent(filepath: string, ref?: string, cwd?: string): Promise<string | null> { return null; }
+        async getFileContent(_filepath: string, _ref?: string, _cwd?: string): Promise<string | null> { return null; }
       }
 
       const adapter: GitAdapter = new ProjectContractGitAdapter();
@@ -739,13 +702,13 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
 
     it('should allow implementing FindingManager and IFindingManager contracts', () => {
       class TestFindingManager implements FindingManager {
-        createFindings(ruleMatches: RuleMatch[], context: EvaluationContext): Finding[] {
+        createFindings(_ruleMatches: RuleMatch[], _context: EvaluationContext): Finding[] {
           return [];
         }
-        computeFingerprint(finding: Omit<Finding, 'id' | 'fingerprint'> | FindingFingerprintInput): string {
+        computeFingerprint(_finding: Omit<Finding, 'id' | 'fingerprint'> | FindingFingerprintInput): string {
           return 'fingerprint_abc123';
         }
-        resolveFindings(previousFindings: Finding[], freshFindings: Finding[]): VerificationReport {
+        resolveFindings(_previousFindings: Finding[], _freshFindings: Finding[]): VerificationReport {
           return {
             status: 'PASS',
             verdictSummary: 'Verified 0 findings',

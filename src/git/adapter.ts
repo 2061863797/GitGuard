@@ -130,7 +130,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       throw new ForbiddenGitOperationError(subcommand || args[0]);
     }
 
-    if (subcommand && !ALLOWED_GIT_SUBCOMMANDS.has(subcommand)) {
+    if (!ALLOWED_GIT_SUBCOMMANDS.has(subcommand)) {
       throw new ForbiddenGitOperationError(subcommand);
     }
 
@@ -141,18 +141,26 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       throw new ForbiddenGitOperationError('symbolic-ref write or unsupported arguments');
     }
 
+    const pathSeparator = args.indexOf('--');
+    const optionArgs = args.slice(1, pathSeparator === -1 ? undefined : pathSeparator);
     if (
       ['diff', 'show', 'log'].includes(subcommand) &&
-      args.slice(1).some((arg) =>
+      optionArgs.some((arg) =>
         arg === '--output' || arg.startsWith('--output=') ||
         arg === '--ext-diff' || arg === '--textconv'
       )
     ) {
       throw new ForbiddenGitOperationError(`${subcommand} write or external-diff option`);
     }
+    if (subcommand === 'cat-file' && optionArgs.some((arg) => arg === '--filters' || arg === '--textconv')) {
+      throw new ForbiddenGitOperationError('cat-file external filter option');
+    }
+    const safeArgs = ['diff', 'show', 'log'].includes(subcommand)
+      ? [subcommand, '--no-ext-diff', '--no-textconv', ...args.slice(1)]
+      : args;
 
     try {
-      const result = await execFileAsync('git', args, {
+      const result = await execFileAsync('git', safeArgs, {
         cwd: targetCwd,
         maxBuffer: this.maxBuffer,
         timeout: this.timeoutMs,
@@ -489,7 +497,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
 
         try {
           const noIndexRes = await this.executeGit(
-            ['diff', '--no-color', '--no-index', '--', '/dev/null', untracked],
+            ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-index', '--', '/dev/null', untracked],
             targetCwd
           );
           if (noIndexRes.stdout) {

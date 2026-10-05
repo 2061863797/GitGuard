@@ -4,7 +4,7 @@
 
 这份说明适用于本仓库的源码版本。第一次使用只需准备 Node.js 20+、Git 2.30+ 和 pnpm 9+。所有命令都在 **GitGuard 源码目录**执行；`--cwd` 指向要检查的 Git 仓库。
 
-> 本项目的 npm 包名是 `gitguard-verify`，CLI 命令仍是 `gitguard`。新包尚未发布，下面使用源码运行。[npm 上的 `gitguard` 包](https://www.npmjs.com/package/gitguard)属于另一个项目，不要用它安装本项目。
+> 本项目定义的 npm 包名是 `gitguard-verify`，CLI 命令是 `gitguard`。下面使用本仓库源码运行；如选择 npm 分发，请核对包的仓库链接与版本，避免与同名包混淆。
 
 ## 1. 启动并确认 CLI 可用
 
@@ -41,7 +41,10 @@ pnpm gitguard inspect --staged --cwd "C:\work\my-project"
 ```powershell
 pnpm gitguard inspect --target HEAD --cwd "C:\work\my-project"
 pnpm gitguard inspect --target "HEAD~1..HEAD" --cwd "C:\work\my-project"
+pnpm gitguard inspect --target "main...HEAD" --cwd "C:\work\my-project"
 ```
+
+`base..head` 比较两个提交端点；`base...head` 从共同祖先比较到 `head`，适合查看一个分支引入的变更。仅传入 `target` 时会自动选择范围。
 
 ## 3. 运行质量门禁
 
@@ -110,7 +113,7 @@ pnpm gitguard findings --cwd "C:\work\my-project"
 pnpm gitguard verify --offline --findings "GG-001" --cwd "C:\work\my-project"
 ```
 
-第二条中的 `GG-001` 仅为示例，请替换为上一条实际输出的 finding ID。`verify` 会重新判断已有 finding 是否已解决；也可以重新运行 `check` 检查当前改动。CLI 发生配置或 Git 错误时也会返回非零退出码。
+第二条中的 `GG-001` 仅为示例，请替换为上一条实际输出的 finding ID。finding 记录属于当前仓库；使用其他仓库的 ID 会返回未知 ID 并阻断复验。记录损坏或写入失败时不会给出状态已保存的成功结论。`verify` 会重新判断已有 finding 是否已解决；也可以重新运行 `check` 检查当前改动。CLI 发生配置或 Git 错误时也会返回非零退出码。
 
 ## 常见问题
 
@@ -118,6 +121,7 @@ pnpm gitguard verify --offline --findings "GG-001" --cwd "C:\work\my-project"
 - **检查结果显示 0 个文件**：检查 `git status`，以及是否误选了 `--staged` 或 `--working`。已提交的内容可用 `--target HEAD` 检查。
 - **提示找不到 pnpm、lint 或 tsc**：在目标仓库配置实际可运行的 `deterministic.test/lint/typecheck.run`，或仅关闭不适用的检查。
 - **没有 API 密钥**：CLI 可用 `check --offline`，这不会跳过本地确定性检查；图形界面的完整检查、复验和 MCP 语义工具需要在线密钥。
-- **想在 MCP 客户端使用**：先 `pnpm build`，再让客户端用 Node.js 启动本仓库的绝对路径 `bin/gitguard.js mcp`。具体配置见 [README 的 MCP 部分](../README.md#mcp-server-setup)。
+- **想在 MCP 客户端使用**：先 `pnpm build`，再让客户端用 Node.js 启动本仓库的绝对路径 `bin/gitguard.js mcp`。启动配置见 [README 的 MCP 部分](../README.md#mcp-server-setup)，可复制的工具调用和错误处理见 [MCP 调用指南](mcp.zh-CN.md)。
+- **MCP 调用超时**：根据项目检查与在线请求的总耗时设置客户端等待上限；Codex 可在该服务器配置中设置 `tool_timeout_sec`。先确认调用是否已结束，再重试可能写入 finding 状态的工具。
 
 完整配置项见 [README 配置参考](../README.md#configuration-reference-gitguardyml)。

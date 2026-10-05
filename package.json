@@ -23,12 +23,13 @@
     "bin",
     ".gitguard.yml",
     "README.md",
+    "SECURITY.md",
     "docs"
   ],
   "scripts": {
     "build": "rimraf dist && tsc",
     "clean": "rimraf dist",
-    "lint": "oxlint src tests bin scripts",
+    "lint": "oxlint --deny-warnings src tests bin scripts",
     "typecheck": "tsc --noEmit",
     "prepack": "pnpm run build",
     "pretest": "pnpm run build",

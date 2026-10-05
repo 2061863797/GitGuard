@@ -6,7 +6,6 @@ import {
   filterMatchingFiles,
   evaluateNumericalThreshold,
   evaluateScoreThreshold,
-  DEFAULT_BUILTIN_RULES,
   getEffectiveBuiltinRule,
   evaluateSemanticRuleMatch,
 } from '../../../src/policy/index.js';

@@ -96,6 +96,8 @@ export interface VerifyOptions {
   task?: string | TaskContext;
   /** Git change scope */
   scope?: ChangeScope;
+  /** Commit or complete base..head / base...head range to recheck. */
+  target?: string;
   /** Repository root or working directory */
   cwd?: string;
   /** Explicit path to .gitguard.yml configuration file */

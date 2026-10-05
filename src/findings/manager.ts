@@ -23,7 +23,7 @@ import {
   normalizeAffectedFiles,
   normalizeHunk,
 } from './fingerprint.js';
-import { FindingStore, FileFindingStore, MemoryFindingStore } from './store.js';
+import { FindingStore, FileFindingStore } from './store.js';
 
 /**
  * Calculates a match score between a fresh finding and a previous active finding.
@@ -231,6 +231,7 @@ export class DefaultFindingManager implements FindingManager {
         detectedHeadSha: context.repository?.headSha || '',
         detectionScope: (context.diff as any)?.scope || 'all',
         diffHash,
+        repositoryRoot: context.repository?.rootPath,
       };
 
       const finding: Finding = {

@@ -10,7 +10,6 @@ import {
   scanDiffForSecrets,
   scanContentForSecrets,
   redactSecret,
-  SECRET_PATTERNS,
 } from '../../../src/analysis/deterministic/secrets.js';
 import {
   DeterministicRunner,

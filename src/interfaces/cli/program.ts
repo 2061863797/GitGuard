@@ -4,7 +4,7 @@
  */
 
 import { Command } from 'commander';
-import { GITGUARD_VERSION } from '../../index.js';
+import { GITGUARD_VERSION } from '../../version.js';
 import { inspectCommand } from './inspect.js';
 import { checkCommand } from './check.js';
 import { findingsCommand } from './findings.js';

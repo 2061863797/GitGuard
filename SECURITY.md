@@ -1,90 +1,67 @@
 # Security Policy & Threat Model
 
-GitGuard takes software security, data privacy, and agent verification integrity seriously. This document outlines our security architecture, threat model, boundaries, and disclosure process.
+This document describes the current source behavior. An existing package or EXE must be updated to a build containing the relevant fixes; editing source does not update an installed executable.
 
----
+## Trust boundaries
 
-## 1. Threat Model & Security Boundaries
-
-GitGuard operates as a repository-aware verification engine that interacts with local git repositories, local tools/subprocesses, and optional remote AI decision providers (TypeSafe / Jev).
-
-### Architectural Boundaries
+GitGuard reads Git repositories, runs configured local tools, and can send repository context to TypeSafe / Jev. Repository contents and model responses are untrusted input. Project check commands are executable code and require trust in the repository.
 
 ```text
-┌────────────────────────────────────────────────────────┐
-│                   Untrusted Environment                │
-│    (Git Diff, Working Tree, Untracked Files, .env)     │
-└───────────────────────────┬────────────────────────────┘
-                            │
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                   GitGuard Core Engine                 │
-│                                                        │
-│  [Dual Context Separation]                             │
-│  ├── RawRepositoryContext                              │
-│  │   └── Local Deterministic Secret Scanner            │
-│  │       (Unredacted diff, flags hardcoded secrets)   │
-│  │                                                     │
-│  └── SemanticEvaluationContext                         │
-│      └── Context Privacy Sanitizer                     │
-│          (Redacts API keys, passwords, tokens, env)    │
-└──────────────┬──────────────────────────┬──────────────┘
-               │                          │
-               ▼                          ▼
-┌────────────────────────┐      ┌────────────────────────┐
-│  Local Subprocesses    │      │  External AI Provider  │
-│  (npm test, tsc, etc.) │      │  (TypeSafe Jev API)    │
-│  * Strictly controlled │      │  * Sanitized payload   │
-│  * Repo-local only     │      │  * TLS HTTPS only      │
-└────────────────────────┘      └────────────────────────┘
+Repository content
+  ├─ Raw context → local deterministic checks and secret scan
+  └─ Semantic context → privacy filtering → optional online provider
+Finding records → current repository store → verification and state updates
 ```
 
-### Key Security Assurances
+### Context and privacy
 
-1. **Dual Context Architecture**:
-   - **Local Scanning**: The built-in deterministic secret scanner analyzes unredacted diffs to detect committed or staged secrets (such as `.env`, AWS tokens, SSH private keys, GitHub PATs).
-   - **Remote AI Calls**: Context passed to external semantic providers (e.g. TypeSafe System One) is strictly sanitized. Secret keys, high-entropy tokens, password patterns, and configured sensitive files (`.env*`, `*.pem`, `*.key`) are redacted before any outbound payload is serialized.
+The deterministic scanner receives unredacted changes so privacy filtering does not hide secrets from local scanning. Semantic context omits sensitive-file hunks and code spans, and applies pattern-based redaction to task text, derived keywords, diffs, surrounding code, instructions and related test snippets.
 
-2. **Read-Only Git Inspection**:
-   - The Git adapter rejects mutating Git commands and output redirection options, and disables optional Git index locks during inspection. It does not run `git commit`, `git checkout`, `git reset`, or `git push`.
-   - GitGuard's own findings and evaluation cache are stored under `.git/gitguard/`. Configured test, lint and typecheck subprocesses run in the repository and may write files according to their scripts; run checks only for repositories whose commands you trust.
+Known patterns include private-key blocks, several provider token formats, bearer tokens and named password/API-key assignments. Quoted assignments and unquoted `:` / `=` forms are covered. Redaction is heuristic: it can miss unknown formats, short values and secrets without recognizable labels. It does not provide general high-entropy detection or guarantee that every secret is removed.
 
-3. **Subprocess Isolation**:
-   - Deterministic commands (tests, linters, typecheckers) configured in `.gitguard.yml` or default presets run within the local repository working directory with timeouts to prevent hanging or unbounded execution.
-   - Configured commands run without shell interpolation, but can execute repository scripts or installed tools. Treat repository command configuration as executable code.
+Online payloads can include task intent and keywords, file names and statistics, branch/commit metadata, diffs, surrounding code, related tests and repository instructions. Sensitive-file names and other metadata may still identify the project. Review the selected scope and privacy settings before using online checks for confidential projects.
 
-4. **Prompt Injection & Adversarial Diff Mitigation**:
-   - Code diffs and commit messages could contain adversarial text attempting to trick AI evaluators. GitGuard structures evaluation questions with strict schemas (`noul`, `choice`, `score`) and typed criteria, rather than free-form unconstrained prompts, minimizing prompt injection attack surface.
+MCP results and error messages apply the same known-secret redaction while preserving valid structured JSON. Stdout is reserved for MCP JSON-RPC; diagnostics go to stderr. This filtering does not make arbitrary project output safe to share.
 
-5. **Trust Boundary, Verification Integrity & Secret Exfiltration Defense**:
-   - Repository configuration (`.gitguard.yml`) cannot set a custom `system_one.baseUrl` without explicit `--allow-custom-provider` opt-in, including loopback addresses. A user-supplied `TYPESAFE_BASE_URL` environment variable remains an explicit override. Repository configuration also cannot disable secret redaction or include full files in semantic context.
-   - Cache directory paths (`gate.cache.directory`) are strictly confined to `.git/gitguard/cache/` namespaces with path traversal protections to prevent writes outside repository boundaries. Live semantic caches are isolated by provider and bypassed when `--offline` is active.
-   - Finding store files and caches utilize fail-closed cross-process atomic file locking (`O_CREAT | O_EXCL`) with unique owner tokens and process liveness detection (`process.kill(pid, 0)`) to guarantee state integrity under concurrent multi-agent environments.
-   - **Baseline Drift Detection**: The verification engine tracks finding provenance (commit SHA, scope, diff hashes) and verifies file contents at `HEAD`. If an agent commits a policy violation into repository history instead of remediating it, GitGuard detects the committed violation, refuses false resolution, revives the finding, and maintains `BLOCK`.
+### Git reads and project commands
 
----
+The Git adapter uses an allowlist, rejects mutating commands and output-file options, and disables optional index locks. Diff, show and log calls disable external diff helpers and text conversion, including no-index diffs for untracked files. External blob filter options are rejected. GitGuard does not create Git commits or push changes.
 
-## 2. Supported Versions
+Configured test, lint and typecheck commands run in the repository with timeouts and without shell interpolation. Those commands can run repository scripts and write files. They are not an operating-system sandbox. Read their configuration and scripts before checking an unfamiliar repository.
 
-Security updates are applied to the active release stream:
+GitGuard can write finding and cache data under `.git/gitguard/`. An inspection summary does not run project checks or secret scanning by default. The MCP task-completion tool performs online semantic evaluation and may persist findings; it does not run local project checks.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
-| < 0.2.0 | :x:                |
+### Provider and configuration authority
 
----
+Repository `.gitguard.yml` cannot disable secret redaction, include full files in semantic context, or select a custom `system_one.baseUrl` without explicit custom-provider opt-in. CLI users can opt in with `--allow-custom-provider`. Environment variables such as `TYPESAFE_BASE_URL` and programmatic SDK options are trusted caller controls, so repository-file restrictions do not automatically apply to them.
 
-## 3. Reporting a Vulnerability
+The provider uses HTTPS for remote endpoints and permits explicitly configured HTTP loopback endpoints for local use. The default endpoint is TypeSafe. Keep API keys in the caller's environment or secret manager, not in repository configuration. A trusted endpoint override determines where the API key and context are sent.
 
-If you discover a security vulnerability or security-sensitive defect in GitGuard:
+MCP semantic tools require fresh TypeSafe responses and bypass semantic caching. Missing keys, failed requests, empty or invalid answers and mock/fallback decisions produce errors instead of invented success scores. Verification of unknown finding IDs stops before commands and online evaluation.
 
-1. **Do NOT file a public GitHub issue.**
-2. Send a detailed vulnerability report privately to the maintainers via GitHub Security Advisories or by contacting the repository maintainer directly.
-3. Include:
-   - Description of the vulnerability.
-   - Steps to reproduce or proof-of-concept diff.
-   - Potential impact.
-   - Any suggested mitigations.
+### Finding state and verification integrity
 
-We will acknowledge receipt within 48 hours and work with you to analyze, patch, and coordinate responsible disclosure.
+Disk records are loaded from the current repository. New finding provenance includes its repository root; shared in-memory fallback is accepted only when that root matches. Existing records without this field remain compatible when read from the current repository's own store.
+
+Corrupt or unreadable stores stop verification. Writes use a temporary file in the destination directory and atomic replacement while holding the store lock; failed replacement does not overwrite existing records and is reported as a write error. Verification that cannot persist its state returns `BLOCK`, `allResolved: false` and `metadata.persistenceOk: false`. A successful in-memory assessment is not evidence of durable storage.
+
+The verifier also checks tracked finding content at `HEAD` to avoid resolving supported violations merely because the offending changes were committed. Finding IDs and fingerprints are not globally scoped identifiers for unrelated repositories. Reports apply to the selected targets and Git scope.
+
+### Model limitations
+
+Typed semantic questions and response validation constrain answer shape and make provider failures visible. They do not prove model judgments correct or eliminate prompt injection in repository content. Online probabilities complement deterministic checks and human review.
+
+## Supported versions
+
+Security work targets the active release stream:
+
+| Version | Supported |
+| --- | --- |
+| 0.2.x | Yes |
+| < 0.2.0 | No |
+
+Source tests with simulated provider responses do not establish live service availability, real-model quality, installed-EXE acceptance or current remote CI status.
+
+## Reporting a vulnerability
+
+Avoid publishing credentials or an exploit in a public issue. Send a private report through GitHub Security Advisories or contact the repository maintainer privately. Include the affected version, reproduction steps, impact and any suggested mitigation. Maintainers can then coordinate validation, remediation and disclosure.

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import * as crypto from 'node:crypto';
+
 import {
   normalizeHunk,
   normalizeAffectedFiles,
@@ -8,7 +8,6 @@ import {
 } from '../../../src/findings/fingerprint.js';
 import {
   DefaultFindingManager,
-  getDefaultExpectedEvidence,
 } from '../../../src/findings/manager.js';
 import type { DiffFile } from '../../../src/types/diff.js';
 import type { Finding, FindingStatus, FindingSeverity } from '../../../src/types/finding.js';

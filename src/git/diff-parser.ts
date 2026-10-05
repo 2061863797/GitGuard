@@ -10,7 +10,6 @@ import type {
   DiffLine,
   DiffParser,
 } from '../types/diff.js';
-import type { FileChangeStatus } from '../types/git.js';
 
 /**
  * Strips Git diff path prefixes (e.g. 'a/' or 'b/') and outer quotes.
@@ -30,32 +29,37 @@ function stripPrefix(pathStr: string): string {
  * Unescapes Git octal characters and escaped quotes in paths.
  */
 function unescapeGitPath(pathStr: string): string {
-  const unescaped = pathStr
-    .replace(/\\([0-7]{1,3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\');
-
-  try {
-    return Buffer.from(unescaped, 'binary').toString('utf-8');
-  } catch {
-    return unescaped;
-  }
+  const escapes: Record<string, string> = {
+    '"': '"', '\\': '\\', a: '\x07', b: '\b', f: '\f',
+    n: '\n', r: '\r', t: '\t', v: '\v',
+  };
+  // Decode octal byte runs as UTF-8, preserving literal Unicode and escaped backslashes.
+  return pathStr.replace(/(?:\\[0-7]{3})+|\\(["\\abfnrtv])/g, (escaped, character?: string) =>
+    character
+      ? escapes[character]
+      : Buffer.from(Array.from(escaped.matchAll(/\\([0-7]{3})/g), (match) => parseInt(match[1], 8))).toString('utf8')
+  );
 }
 
 /**
  * Parses file paths from a `diff --git a/... b/...` header line.
  */
-function parseDiffGitPaths(line: string): { oldPath: string; newPath: string } | null {
+export function parseDiffGitPaths(line: string): { oldPath: string; newPath: string } | null {
   const prefix = 'diff --git ';
   if (!line.startsWith(prefix)) return null;
   const rest = line.substring(prefix.length).trim();
 
   // Case 1: Quoted paths
   if (rest.startsWith('"')) {
-    const secondQuoteIndex = rest.indexOf('"', 1);
-    if (secondQuoteIndex !== -1) {
-      const firstQuoted = rest.substring(1, secondQuoteIndex);
+    let secondQuoteIndex = 1;
+    for (; secondQuoteIndex < rest.length; secondQuoteIndex++) {
+      if (rest[secondQuoteIndex] === '\\') secondQuoteIndex++;
+      else if (rest[secondQuoteIndex] === '"') break;
+    }
+    if (secondQuoteIndex < rest.length) {
+      const firstQuoted = rest.substring(0, secondQuoteIndex + 1);
       const remaining = rest.substring(secondQuoteIndex + 1).trim();
+      if (!remaining) return null;
       let secondPath = remaining;
       if (secondPath.startsWith('"') && secondPath.endsWith('"')) {
         secondPath = secondPath.substring(1, secondPath.length - 1);
@@ -68,7 +72,7 @@ function parseDiffGitPaths(line: string): { oldPath: string; newPath: string } |
   }
 
   // Case 2: Standard space separated with " b/" delimiter
-  const splitIdx = rest.lastIndexOf(' b/');
+  const splitIdx = Math.max(rest.lastIndexOf(' b/'), rest.lastIndexOf(' "b/'));
   if (splitIdx !== -1) {
     const p1 = rest.substring(0, splitIdx);
     const p2 = rest.substring(splitIdx + 1);

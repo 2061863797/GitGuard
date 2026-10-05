@@ -3,7 +3,7 @@
  * Main Library Entrypoint
  */
 
-export const GITGUARD_VERSION = '0.2.5';
+export { GITGUARD_VERSION } from './version.js';
 
 export * from './types/index.js';
 export * from './git/index.js';
@@ -14,4 +14,3 @@ export * from './policy/index.js';
 export * from './findings/index.js';
 export * from './core/index.js';
 export * from './interfaces/index.js';
-

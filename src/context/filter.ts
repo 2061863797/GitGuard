@@ -5,6 +5,7 @@
  */
 
 import type { EvaluationContext, PrivacyOptions } from '../types/context.js';
+import { parseDiffGitPaths } from '../git/diff-parser.js';
 
 export const REDACTION_TOKEN = '<REDACTED_SECRET>';
 
@@ -73,17 +74,17 @@ const SECRET_REGEX_LIST: Array<{ pattern: RegExp; replacer: (match: string, ...a
   },
   // 7. Authorization: Bearer <token>
   {
-    pattern: /(Bearer\s+)[a-zA-Z0-9_\-\.]{20,}/gi,
+    pattern: /(Bearer\s+)[a-zA-Z0-9_.-]{20,}/gi,
     replacer: (_m, prefix: string) => `${prefix}${REDACTION_TOKEN}`,
   },
   // 8. Key / Password variable assignments with quotes
   {
-    pattern: /((?:password|passwd|secret|api_key|apikey|access_token|private_key|auth_token)\s*[:=]\s*["'])([^"'\s]{8,})(["'])/gi,
+    pattern: /(\b(?:password|passwd|secret|api_key|apikey|access_token|private_key|auth_token)["']?\s*[:=]\s*["'])([^"'\s]{8,})(["'])/gi,
     replacer: (_m, p1: string, _val: string, p3: string) => `${p1}${REDACTION_TOKEN}${p3}`,
   },
   // Unquoted YAML and similar configuration values also occur in ordinary files.
   {
-    pattern: /(\b(?:password|passwd|api_key|apikey|secret_key|auth_token|access_token|private_key)\s*:\s*)([^\s"'`#,]{16,})/gi,
+    pattern: /(\b(?:password|passwd|api_key|apikey|secret_key|auth_token|access_token|private_key)["']?\s*[:=]\s*)([^\s"'`#,;]{8,})/gi,
     replacer: (_m, prefix: string) => `${prefix}${REDACTION_TOKEN}`,
   },
 ];
@@ -151,66 +152,11 @@ export function redactSecrets(text: string): string {
 
   let result = text;
   for (const { pattern, replacer } of SECRET_REGEX_LIST) {
-    result = result.replace(pattern, replacer as unknown as string);
+    result = result.replace(pattern, replacer);
   }
   return result;
 }
 
-/**
- * Strips Git diff path prefixes ('a/' or 'b/') and unescapes quotes.
- */
-function stripGitDiffPrefix(pathStr: string): string {
-  let cleaned = pathStr.trim();
-  if (cleaned.startsWith('"') && cleaned.endsWith('"')) {
-    cleaned = cleaned.substring(1, cleaned.length - 1);
-  }
-  if (cleaned.startsWith('a/') || cleaned.startsWith('b/')) {
-    return cleaned.substring(2);
-  }
-  return cleaned;
-}
-
-/**
- * Extracts oldPath and newPath from a `diff --git ` line.
- */
-function extractDiffGitPaths(line: string): { oldPath?: string; newPath?: string } {
-  const prefix = 'diff --git ';
-  if (!line.startsWith(prefix)) return {};
-  const rest = line.substring(prefix.length).trim();
-
-  if (rest.startsWith('"')) {
-    const secondQuoteIndex = rest.indexOf('"', 1);
-    if (secondQuoteIndex !== -1) {
-      const firstQuoted = rest.substring(1, secondQuoteIndex);
-      let secondPath = rest.substring(secondQuoteIndex + 1).trim();
-      if (secondPath.startsWith('"') && secondPath.endsWith('"')) {
-        secondPath = secondPath.substring(1, secondPath.length - 1);
-      }
-      return {
-        oldPath: stripGitDiffPrefix(firstQuoted),
-        newPath: stripGitDiffPrefix(secondPath),
-      };
-    }
-  }
-
-  const splitIdx = rest.lastIndexOf(' b/');
-  if (splitIdx !== -1) {
-    return {
-      oldPath: stripGitDiffPrefix(rest.substring(0, splitIdx)),
-      newPath: stripGitDiffPrefix(rest.substring(splitIdx + 1)),
-    };
-  }
-
-  const parts = rest.split(/\s+/);
-  if (parts.length >= 2) {
-    return {
-      oldPath: stripGitDiffPrefix(parts[0]),
-      newPath: stripGitDiffPrefix(parts[parts.length - 1]),
-    };
-  }
-
-  return {};
-}
 
 /**
  * Redacts or omits diff hunks for sensitive files in a raw unified diff text.
@@ -262,7 +208,7 @@ export function omitSensitiveDiffHunks(
     const line = lines[i];
 
     if (line.startsWith('diff --git ')) {
-      const paths = extractDiffGitPaths(line);
+      const paths = parseDiffGitPaths(line) ?? { oldPath: '', newPath: '' };
       const fileIsSens =
         (paths.newPath && sensitivePathSet.has(paths.newPath)) ||
         (paths.oldPath && sensitivePathSet.has(paths.oldPath)) ||
@@ -341,6 +287,9 @@ export function sanitizeEvaluationContext(
   const shouldRedact = options?.redactSecrets !== false;
   const includeFullFiles = options?.includeFullFiles === true;
   const excludePatterns = options?.excludePatterns;
+  const taskText = context.task
+    ? shouldRedact ? redactSecrets(context.task.task) : context.task.task
+    : undefined;
 
   const rawWithOmissions = omitSensitiveDiffHunks(
     context.diff.raw,
@@ -353,7 +302,11 @@ export function sanitizeEvaluationContext(
     task: context.task
       ? {
           ...context.task,
-          task: shouldRedact ? redactSecrets(context.task.task) : context.task.task,
+          task: taskText!,
+          // Drop derived keywords that disappeared during redaction, including lowercased credentials.
+          keywords: shouldRedact
+            ? context.task.keywords?.filter((keyword) => taskText!.toLowerCase().includes(keyword.toLowerCase()))
+            : context.task.keywords,
         }
       : undefined,
     diff: {
@@ -369,7 +322,8 @@ export function sanitizeEvaluationContext(
             ? []
             : file.hunks.map((hunk) => ({
                 ...hunk,
-                lines: hunk.lines,
+                header: shouldRedact ? redactSecrets(hunk.header) : hunk.header,
+                lines: shouldRedact ? hunk.lines.map(redactSecrets) : hunk.lines,
               })),
         };
       }),
@@ -434,4 +388,3 @@ export class PrivacyFilter {
     return sanitizeEvaluationContext(context, this.options);
   }
 }
-

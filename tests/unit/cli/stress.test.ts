@@ -22,14 +22,12 @@ import * as fs from 'node:fs/promises';
 import {
   inspectCommand,
   checkCommand,
-  findingsCommand,
-  verifyCommand,
 } from '../../../src/interfaces/cli/index.js';
-import { createCliProgram } from '../../../src/interfaces/cli/program.js';
+
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
 import { FileFindingStore } from '../../../src/findings/store.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
-import type { Finding } from '../../../src/types/finding.js';
+
 import { GITGUARD_VERSION } from '../../../src/index.js';
 
 const execFileAsync = promisify(execFile);

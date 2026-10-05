@@ -15,14 +15,12 @@ import { DefaultContextBuilder } from '../../../src/context/builder.js';
 import {
   redactSecrets,
   isSensitiveFile,
-  sanitizeEvaluationContext,
   REDACTION_TOKEN,
-  DEFAULT_SENSITIVE_FILE_PATTERNS,
 } from '../../../src/context/filter.js';
 import { GitCLIAdapter } from '../../../src/git/adapter.js';
-import { parseDiff } from '../../../src/git/diff-parser.js';
+
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
-import type { EvaluationContext } from '../../../src/types/context.js';
+
 
 describe('Empirical Challenger M1-2: Context Builder & Secret Redaction Stress Suite', () => {
   let fixture: GitFixture;

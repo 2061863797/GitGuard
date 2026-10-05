@@ -117,6 +117,8 @@ export interface FindingProvenance {
   diffHash?: string;
   /** Commit SHA if detected on a commit scope */
   commitSha?: string;
+  /** Repository root where the finding was detected; guards shared in-memory state. */
+  repositoryRoot?: string;
 }
 
 /**

@@ -55,7 +55,7 @@ pnpm gitguard inspect --cwd 'C:\work\my-project'
 
 `pnpm gitguard` 通过 `tsx` 直接运行源码，不需要先构建。要运行 `node bin/gitguard.js` 或让 MCP 客户端启动源码版本，先执行 `pnpm build`。Linux 和 macOS 用户把示例中的 Windows 路径换成自己的项目路径。
 
-本仓库的 npm 包名是 `gitguard-verify`，CLI 命令名仍是 `gitguard`。该 npm 包尚未发布；[npm 上的 `gitguard`](https://www.npmjs.com/package/gitguard) 是另一个项目。源码操作细节见 [中文版快速上手](docs/quickstart.zh-CN.md)。
+本仓库定义的 npm 包名是 `gitguard-verify`，CLI 命令名是 `gitguard`。本文提供源码和 EXE 的启动方式；npm 的发布状态请在 [gitguard-verify 包页面](https://www.npmjs.com/package/gitguard-verify)核对，并确认其仓库链接，避免与同名 `gitguard` 包混淆。源码操作细节见 [中文版快速上手](docs/quickstart.zh-CN.md)。
 
 ## 图形界面
 
@@ -77,7 +77,7 @@ pnpm gitguard inspect --cwd 'C:\work\my-project'
 
 | 命令 | 用途 |
 |:---|:---|
-| `inspect` | 查看改动文件、diff 统计和初步发现；默认不运行项目检查命令。 |
+| `inspect` | 汇总改动文件和 diff 统计；默认不执行项目检查或密钥扫描。 |
 | `check` | 对改动执行配置的测试、lint、类型检查、密钥扫描和规则评估。 |
 | `findings` | 查看已记录的 finding。 |
 | `verify` | 修改代码后重新验证指定 finding。 |
@@ -89,6 +89,7 @@ pnpm gitguard inspect --cwd 'C:\work\my-project'
 - 不指定范围时，`inspect` 和 CLI `check` 默认检查全部未提交改动。
 - `--staged` 只检查已 `git add` 的改动；`--working` 只检查未暂存改动。
 - `inspect --target HEAD` 查看指定提交；`inspect --target 'HEAD~1..HEAD'` 查看提交范围。
+- `base..head` 比较两个端点；`base...head` 比较共同祖先到 `head` 的改动，适合查看分支引入的变更。省略范围而传入 `target` 时，自动选择提交或提交范围。
 - `--cwd` 指向**要检查的 Git 仓库**，不是 EXE 所在目录。路径含空格时加引号。
 
 ```powershell
@@ -124,9 +125,10 @@ command = 'C:\Tools\GitGuard\GitGuard.exe'
 args = ["mcp"]
 cwd = 'C:\work\my-project'
 env_vars = ["TYPESAFE_API_KEY"]
+tool_timeout_sec = 180
 ```
 
-先按[在线密钥配置教程](docs/quickstart.zh-CN.md#在线检查配置-typesafe-api-key)设置 `TYPESAFE_API_KEY`；`env_vars` 只转发环境变量名，不包含密钥值。保存后重启客户端；Codex CLI 可运行 `codex mcp list` 确认服务器已配置。实际连接成功还应能看到下面列出的四个工具。
+先按[在线密钥配置教程](docs/quickstart.zh-CN.md#在线检查配置-typesafe-api-key)设置 `TYPESAFE_API_KEY`；`env_vars` 只转发环境变量名，不包含密钥值。`tool_timeout_sec` 是客户端的单次调用等待上限；项目检查较慢时，应根据检查命令和在线请求的总耗时调大。保存后重启客户端；Codex CLI 可运行 `codex mcp list` 确认服务器已配置。实际连接成功还应能看到下面列出的四个工具。
 
 ### 使用 `mcpServers` JSON 的客户端
 
@@ -164,12 +166,16 @@ env_vars = ["TYPESAFE_API_KEY"]
 
 | 工具 | 主要参数 | 作用 |
 |:---|:---|:---|
-| `inspect_changes` | `scope`、`target`、`task`、`cwd` | 查看指定仓库的改动，默认范围 `all`。 |
-| `check_task_completion` | 必填 `task`；可选 `scope`、`repoPath`、`cwd` | 评估改动与任务要求是否匹配，默认范围 `all`。 |
+| `inspect_changes` | `scope`、`target`、`task`、`cwd` / `repoPath` | 本地汇总改动，默认范围 `all`，不运行密钥扫描或项目检查。 |
+| `check_task_completion` | 必填非空 `task`；可选 `scope`、`target`、`cwd` / `repoPath` | 在线评估任务完成度、范围匹配和无关改动，不运行项目检查，可记录 finding。 |
 | `check_before_commit` | `task`、`scope`、`repoPath`、`cwd` | 运行质量门禁，默认范围 **`staged`**。 |
-| `verify_findings` | 必填 `findingIds`；可选 `task`、`scope`、`cwd` | 修复后复查 finding，默认范围 `all`。 |
+| `verify_findings` | 必填非空字符串数组 `findingIds`；可选 `task`、`scope`、`target`、`cwd` / `repoPath` | 复查当前仓库中已有的 finding，并更新状态，默认范围 `all`。 |
 
-例如，让客户端调用 `inspect_changes` 并传入 `cwd = C:\work\my-project`，可以先确认目标仓库和改动范围；再调用 `check_before_commit`，传入任务描述与同一仓库路径。`check_before_commit` 会运行目标仓库配置的检查命令。MCP 的 `check_task_completion`、`check_before_commit` 和 `verify_findings` 每次都要求真实的 TypeSafe 在线语义结果，不使用本地模拟或语义缓存。请确保启动 MCP 的客户端进程能读取 `TYPESAFE_API_KEY`（某些客户端需要在服务环境变量中显式传递）；缺少密钥或在线服务失败时，工具返回错误，不给出模拟结论。`inspect_changes` 只做本地只读改动检查，不调用语义提供方。
+建议先调用 `inspect_changes` 确认仓库和范围；需要判断任务是否完成时调用 `check_task_completion`；准备提交时调用 `check_before_commit`；修复后用同一仓库和实际 finding ID 调用 `verify_findings`。四个工具均接受 `cwd` 或 `repoPath`，同时提供时必须指向同一路径。
+
+三个语义工具要求新的 TypeSafe 在线结果，不使用本地模拟或语义缓存。`verify_findings` 遇到当前仓库不存在的 ID 时会提前返回 `BLOCK` 和 `unknownFindings`，此时不会运行项目检查或联网。缺少密钥或在线请求失败时返回工具错误。`check_before_commit` 和已知 ID 的复验会执行目标仓库配置的检查命令，这些命令可能写入文件。
+
+成功执行的结果同时提供 `structuredContent` 和内容相同的 JSON 文本。`PASS` / `BLOCK` 是检查结论，`isError: true` 表示参数或执行出错；`BLOCK` 本身不属于协议错误。`canCommit` 只表达本次门禁结果，不执行提交；范围为空时不能据此判断任务已完成。可复制的 JSON 调用、字段含义、错误码及排查步骤见 [MCP 调用指南](docs/mcp.zh-CN.md)。
 
 `mcp` 是协议服务，不会像普通命令一样打印交互菜单；手动运行后等待输入是正常现象。`--debug` 的诊断写到 stderr，不占用 MCP 协议的 stdout。
 
@@ -225,10 +231,12 @@ pnpm test
 pnpm test:pack
 ```
 
+`pnpm lint` 将警告也视为失败。`pnpm test` 和 `pnpm test:pack` 会先构建；直接运行 `pnpm exec vitest run ...` 前也须执行 `pnpm build`，否则真实 CLI / stdio 测试可能因缺少 `dist` 产物失败。
+
 Windows x64 上如需自己构建 EXE，使用 Node.js 24+ 和 `pnpm run build:exe`；构建后运行 `pnpm run test:exe`。输出位于 `dist-exe/GitGuard.exe`。普通源码 CLI 不要求 Node.js 24。
 
 ## 安全边界与许可
 
-GitGuard 的 Git 读取不会修改暂存区或创建提交；`check` 和相应 MCP 工具会执行目标仓库配置的检查命令，这些命令可能修改文件。在线语义评估涉及向配置的服务发送经过处理的仓库上下文；敏感项目应先检查 [SECURITY.md](SECURITY.md) 和 `.gitguard.yml` 中的隐私配置。
+GitGuard 的 Git 读取不会修改暂存区或创建提交；`check` 和相应 MCP 工具会执行目标仓库配置的检查命令，这些命令可能修改文件。在线评估发送经敏感路径过滤和已知密钥格式脱敏的上下文，包括任务与关键词、diff、周边代码、相关测试和说明文件。脱敏基于规则，不能保证识别所有秘密；敏感项目应先检查 [SECURITY.md](SECURITY.md) 和 `.gitguard.yml` 中的隐私配置。
 
 GitGuard 使用 [Apache-2.0 许可](LICENSE)。

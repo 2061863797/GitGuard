@@ -162,7 +162,7 @@ export class FileFindingStore implements FindingStore {
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch {
-      return async () => {};
+      throw new GitGuardError(`Cannot create finding store directory: ${dir}`, 'FINDING_STORE_WRITE_ERROR');
     }
 
     const ownerToken = crypto.randomUUID();
@@ -190,8 +190,9 @@ export class FileFindingStore implements FindingStore {
             // Lock may have already been cleaned up
           }
         };
-      } catch (err: any) {
-        if (err?.code === 'EEXIST') {
+      } catch (error: unknown) {
+        const code = (error as NodeJS.ErrnoException)?.code;
+        if (code === 'EEXIST') {
           // Check for stale lock (> 10s)
           try {
             const stat = await fs.stat(this.lockPath);
@@ -216,10 +217,10 @@ export class FileFindingStore implements FindingStore {
           }
           const jitter = Math.floor(Math.random() * 50) + 50;
           await new Promise((r) => setTimeout(r, jitter));
-        } else if (err?.code === 'EACCES' || err?.code === 'EROFS') {
-          return async () => {};
+        } else if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') {
+          throw new GitGuardError(`Cannot acquire finding store lock: ${this.lockPath}`, 'FINDING_STORE_LOCK_ERROR');
         } else {
-          throw err;
+          throw error;
         }
       }
     }
@@ -277,24 +278,21 @@ export class FileFindingStore implements FindingStore {
    * Atomically writes all findings to the JSON file.
    */
   private async writeAll(map: Map<string, Finding>): Promise<void> {
+    const tmpPath = `${this.storePath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
     try {
       const dir = path.dirname(this.storePath);
       await fs.mkdir(dir, { recursive: true });
       const serialized = JSON.stringify(Array.from(map.values()), null, 2);
-      const tmpPath = `${this.storePath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
       await fs.writeFile(tmpPath, serialized, 'utf8');
-      try {
-        await fs.rename(tmpPath, this.storePath);
-      } catch {
-        // Fallback for filesystem locking or cross-device rename
-        await fs.writeFile(this.storePath, serialized, 'utf8');
-        await fs.unlink(tmpPath).catch(() => {});
-      }
+      await fs.rename(tmpPath, this.storePath);
     } catch {
-      // If .git is unwritable (e.g. read-only env or unborn sandbox), keep in memory fallback
+      // Keep process-local evidence, but never report a failed disk write as persisted.
       for (const f of map.values()) {
         await this.memoryFallback.upsert(f);
       }
+      throw new GitGuardError(`Cannot write finding store: ${this.storePath}`, 'FINDING_STORE_WRITE_ERROR');
+    } finally {
+      await fs.unlink(tmpPath).catch(() => {});
     }
   }
 

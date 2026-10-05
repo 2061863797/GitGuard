@@ -3,7 +3,7 @@
  * Unit and integration tests for GitCLIAdapter using isolated temporary Git fixtures.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -26,6 +26,7 @@ describe('GitCLIAdapter', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await fixture.cleanup();
   });
 
@@ -260,6 +261,28 @@ describe('GitCLIAdapter', () => {
   });
 
   describe('File Content Retrieval', () => {
+    it('disables inherited external diff helpers for untracked files and direct diff calls', async () => {
+      await fixture.writeFile('base.txt', 'base\n');
+      await fixture.stage();
+      await fixture.commit('initial');
+      await fixture.writeFile('untracked.txt', 'safe new content\n');
+      const helper = path.join(fixture.path, '.git', 'external-diff.cjs');
+      const marker = path.join(fixture.path, '.git', 'external-diff-ran');
+      await fs.writeFile(helper, 'require("node:fs").writeFileSync(' + JSON.stringify(marker) + ', "ran");');
+      vi.stubEnv('GIT_EXTERNAL_DIFF', 'node "' + helper.replace(/\\/g, '/') + '"');
+
+      expect(await adapter.getDiff('all')).toContain('+safe new content');
+      const direct = await adapter.executeGit(['diff', '--no-index', '--', '/dev/null', 'untracked.txt']);
+      expect(direct.stdout).toContain('+safe new content');
+      await expect(fs.access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('rejects external blob filters and empty commands before invoking Git', async () => {
+      await expect(adapter.executeGit(['cat-file', '--filters', 'HEAD:file.txt'])).rejects.toThrow(ForbiddenGitOperationError);
+      await expect(adapter.executeGit(['cat-file', '--textconv', 'HEAD:file.txt'])).rejects.toThrow(ForbiddenGitOperationError);
+      await expect(adapter.executeGit([])).rejects.toThrow(ForbiddenGitOperationError);
+    });
+
     it('should read working tree content and specific ref content', async () => {
       await fixture.writeFile('config.json', '{"version": 1}');
       await fixture.stage();

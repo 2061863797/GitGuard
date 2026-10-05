@@ -34,6 +34,10 @@ childEnv.PATH = [
 
 const tempRoot = path.resolve(os.tmpdir());
 const tempDir = await fs.mkdtemp(path.join(tempRoot, 'gitguard-exe-smoke-'));
+const resolvedTemp = path.resolve(tempDir);
+if (!resolvedTemp.startsWith(tempRoot + path.sep)) {
+  throw new Error('Refusing to remove a directory outside the temporary root');
+}
 const isolatedExePath = path.join(tempDir, 'GitGuard.exe');
 await fs.copyFile(exePath, isolatedExePath);
 const runGit = (args) => execFileSync(gitPath, args, {
@@ -112,9 +116,5 @@ try {
 
   console.log('GitGuard.exe passed standalone CLI, Git, offline check and MCP smoke tests');
 } finally {
-  const resolvedTemp = path.resolve(tempDir);
-  if (!resolvedTemp.startsWith(tempRoot + path.sep)) {
-    throw new Error('Refusing to remove a directory outside the temporary root');
-  }
   await fs.rm(resolvedTemp, { recursive: true, force: true });
 }

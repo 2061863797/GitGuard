@@ -18,7 +18,6 @@ import { TypeSafeSystemOneProvider } from '../../../src/analysis/semantic/typesa
 import type { EvaluationContext } from '../../../src/types/context.js';
 import type {
   SemanticQuestion,
-  SemanticDecision,
   DecisionProvider,
 } from '../../../src/types/provider.js';
 import { ProviderError } from '../../../src/types/errors.js';

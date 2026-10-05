@@ -234,7 +234,7 @@ export class DefaultContextBuilder implements ContextBuilder {
     // 1. Extract alphanumeric words
     const words = trimmed
       .toLowerCase()
-      .split(/[^a-zA-Z0-9_\-]+/)
+      .split(/[^a-zA-Z0-9_-]+/)
       .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
     for (const w of words) {
       keywordsSet.add(w);

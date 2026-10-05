@@ -12,13 +12,11 @@ import * as path from 'node:path';
 import { GitCLIAdapter } from '../../../src/git/adapter.js';
 import {
   UnifiedDiffParser,
-  parseDiff,
   parseHunkLines,
 } from '../../../src/git/diff-parser.js';
 import {
   ForbiddenGitOperationError,
   NotAGitRepositoryError,
-  InvalidGitRefError,
 } from '../../../src/types/errors.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 

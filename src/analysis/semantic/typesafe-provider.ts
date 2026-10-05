@@ -6,6 +6,7 @@
  */
 
 import type { EvaluationContext } from '../../types/context.js';
+import { GITGUARD_VERSION } from '../../version.js';
 import type {
   DecisionProvider,
   SemanticQuestion,
@@ -400,7 +401,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'User-Agent': 'GitGuard/0.2.4',
+            'User-Agent': `GitGuard/${GITGUARD_VERSION}`,
           },
           body: JSON.stringify(payload),
           signal: controller.signal,

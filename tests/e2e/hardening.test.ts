@@ -336,6 +336,11 @@ describe('Tier 5: Boundary Conditions & Coverage Hardening', () => {
             expectedEvidence: [],
             fingerprint: 'fp_bulk_1',
             createdAt: new Date().toISOString(),
+            provenance: {
+              repositoryRoot: fixture.repoPath,
+              detectedHeadSha: '',
+              detectionScope: 'all',
+            },
           },
         ]),
         resolveFindings: vi.fn().mockImplementation((prev) => ({

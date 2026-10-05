@@ -8,8 +8,10 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +26,12 @@ async function run() {
   console.log(`Target package: ${packageName}@${expectedVersion}`);
 
   // Create isolated temp workspace
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gitguard-pack-test-'));
+  const tempRoot = path.resolve(os.tmpdir());
+  const tempDir = await fs.mkdtemp(path.join(tempRoot, 'gitguard-pack-test-'));
+  const resolvedTemp = path.resolve(tempDir);
+  if (!resolvedTemp.startsWith(tempRoot + path.sep)) {
+    throw new Error('Refusing to remove a directory outside the temporary root');
+  }
   console.log(`Isolated temp test directory: ${tempDir}`);
 
   let tarballPath = '';
@@ -67,6 +74,10 @@ async function run() {
     if (!quickstart.includes('# GitGuard 快速上手')) {
       throw new Error('Installed package is missing the Chinese quickstart guide');
     }
+    const installedRoot = path.join(tempDir, 'node_modules', packageName);
+    for (const relativePath of ['docs/mcp.zh-CN.md', 'SECURITY.md']) {
+      await fs.access(path.join(installedRoot, relativePath));
+    }
 
     // 3. Verify CLI execution in isolated directory
     console.log('Verifying CLI --version execution...');
@@ -98,11 +109,42 @@ async function run() {
       { cwd: tempDir, stdio: 'inherit' }
     );
 
+    // 5. Verify the installed MCP entry point, discovery and structured response.
+    const fixtureRoot = path.join(tempDir, 'mcp-fixture');
+    await fs.mkdir(fixtureRoot);
+    execFileSync('git', ['init', '-q'], { cwd: fixtureRoot, windowsHide: true });
+    await fs.writeFile(path.join(fixtureRoot, 'hello.txt'), 'package MCP smoke\n', 'utf8');
+    execFileSync('git', ['add', 'hello.txt'], { cwd: fixtureRoot, windowsHide: true });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [path.join(installedRoot, 'bin', 'gitguard.js'), 'mcp'],
+      cwd: fixtureRoot,
+      stderr: 'pipe',
+    });
+    const client = new Client({ name: 'gitguard-pack-smoke', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await client.connect(transport);
+      const tools = (await client.listTools()).tools;
+      if (tools.length !== 4 || !tools.some((tool) => tool.name === 'inspect_changes')) {
+        throw new Error('Installed MCP server has incorrect tool discovery');
+      }
+      const result = await client.callTool({ name: 'inspect_changes', arguments: { cwd: fixtureRoot, scope: 'staged' } });
+      if (result.isError || result.structuredContent?.summary?.filesChanged !== 1) {
+        throw new Error('Installed MCP server failed structured inspection');
+      }
+      const textContent = result.content.find((item) => item.type === 'text');
+      if (!textContent || JSON.stringify(JSON.parse(textContent.text)) !== JSON.stringify(result.structuredContent)) {
+        throw new Error('Installed MCP structured and text responses differ');
+      }
+    } finally {
+      await client.close();
+    }
+    console.log('Verified installed MCP discovery and structured inspection');
     console.log('✅ Package distribution smoke test PASSED successfully!');
   } finally {
     // Cleanup temporary directory
     try {
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await fs.rm(resolvedTemp, { recursive: true, force: true });
     } catch {
       // ignore cleanup errors
     }

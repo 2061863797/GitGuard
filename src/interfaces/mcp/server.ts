@@ -6,28 +6,27 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { format } from 'node:util';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  ErrorCode,
+  McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { GitGuardEngine } from '../../types/engine.js';
 import { DefaultGitGuardEngine } from '../../core/engine.js';
-import { GITGUARD_VERSION } from '../../index.js';
+import { GITGUARD_VERSION } from '../../version.js';
+import { redactSecrets } from '../../context/filter.js';
 import { GITGUARD_MCP_TOOLS, executeMcpTool } from './tools.js';
 
 /**
  * Diagnostic logger for the MCP server that strictly directs output to stderr
  * to prevent frame corruption of the stdio JSON-RPC protocol.
  */
-export function logDiagnostic(message: string, ...args: any[]): void {
+export function logDiagnostic(message: string, ...args: unknown[]): void {
   const timestamp = new Date().toISOString();
-  const formatted = `[gitguard-mcp ${timestamp}] ${message}`;
-  if (args.length > 0) {
-    process.stderr.write(`${formatted} ${JSON.stringify(args)}\n`);
-  } else {
-    process.stderr.write(`${formatted}\n`);
-  }
+  process.stderr.write(`[gitguard-mcp ${timestamp}] ${redactSecrets(format(message, ...args))}\n`);
 }
 
 export interface McpServerOptions {
@@ -82,6 +81,9 @@ export class GitGuardMcpServer {
     // 2. tools/call handler
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      if (!GITGUARD_MCP_TOOLS.some((tool) => tool.name === name)) {
+        throw new McpError(ErrorCode.InvalidParams, `Unknown tool name: "${redactSecrets(name)}"`);
+      }
       if (this.debug) {
         logDiagnostic('Calling tool: %s', name);
       }
@@ -111,14 +113,12 @@ export class GitGuardMcpServer {
   public async close(): Promise<void> {
     try {
       await this.server.close();
-      if (this.transport && 'close' in this.transport) {
-        await (this.transport as any).close();
-      }
+      this.transport = undefined;
       if (this.debug) {
         logDiagnostic('GitGuard MCP server closed.');
       }
-    } catch (err: any) {
-      logDiagnostic('Error while closing server: %s', err.message || String(err));
+    } catch (error: unknown) {
+      logDiagnostic('Error while closing server: %s', error instanceof Error ? error.message : String(error));
     }
   }
 

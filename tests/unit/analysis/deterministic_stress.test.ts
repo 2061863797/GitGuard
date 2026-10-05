@@ -21,7 +21,6 @@ import {
 import {
   scanDiffForSecrets,
   redactSecret,
-  SECRET_PATTERNS,
 } from '../../../src/analysis/deterministic/secrets.js';
 import { DeterministicMockProvider } from '../../../src/analysis/semantic/mock-provider.js';
 import { TypeSafeSystemOneProvider } from '../../../src/analysis/semantic/typesafe-provider.ts';
