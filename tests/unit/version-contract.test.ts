@@ -1,7 +1,7 @@
 /**
  * tests/unit/version-contract.test.ts
- * Strict version alignment contract test ensuring package.json, library exports,
- * CLI version flags, and MCP server versions never drift.
+ * Strict version alignment contract: package.json, library export, MCP server
+ * version and both plugin manifests never drift.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -13,12 +13,26 @@ import { DefaultGitGuardEngine } from '../../src/core/engine.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
+const readJson = (relativePath: string) =>
+  JSON.parse(fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8'));
+
 describe('Version Alignment Contract', () => {
-  it('package.json version matches exported GITGUARD_VERSION', () => {
-    const pkgPath = path.resolve(process.cwd(), 'package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    expect(pkg.version).toBe(GITGUARD_VERSION);
-    expect(pkg.version).toBe('0.2.5');
+  it('package.json and both plugin manifests match GITGUARD_VERSION', () => {
+    expect(GITGUARD_VERSION).toBe('0.3.0');
+    expect(readJson('package.json').version).toBe(GITGUARD_VERSION);
+    expect(readJson('plugins/gitguard/.claude-plugin/plugin.json').version).toBe(GITGUARD_VERSION);
+    expect(readJson('plugins/gitguard/.codex-plugin/plugin.json').version).toBe(GITGUARD_VERSION);
+  });
+
+  it('plugin manifests point at the bundled server and shared skill', () => {
+    const claude = readJson('plugins/gitguard/.claude-plugin/plugin.json');
+    expect(claude.mcpServers.gitguard.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/server/gitguard-mcp.mjs']);
+    const codex = readJson('plugins/gitguard/.codex-plugin/plugin.json');
+    expect(codex.skills).toBe('./skills/');
+    const codexMcp = readJson(path.join('plugins/gitguard', codex.mcpServers));
+    expect(codexMcp.mcpServers.gitguard).toMatchObject({ command: 'node', args: ['gitguard-mcp.mjs'], cwd: 'server' });
+    expect(fs.existsSync(path.resolve('plugins/gitguard/server/gitguard-mcp.mjs'))).toBe(true);
+    expect(fs.existsSync(path.resolve('plugins/gitguard/skills/gitguard/SKILL.md'))).toBe(true);
   });
 
   it('MCP server initialization reports version strictly matching GITGUARD_VERSION', async () => {
@@ -33,9 +47,7 @@ describe('Version Alignment Contract', () => {
     );
     await client.connect(clientTransport);
 
-    const initResult = client.getServerVersion();
-    expect(initResult?.version).toBe(GITGUARD_VERSION);
-    expect(initResult?.version).toBe('0.2.5');
+    expect(client.getServerVersion()?.version).toBe(GITGUARD_VERSION);
 
     await client.close();
     await server.close();

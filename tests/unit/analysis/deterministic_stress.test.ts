@@ -22,10 +22,7 @@ import {
   scanDiffForSecrets,
   redactSecret,
 } from '../../../src/analysis/deterministic/secrets.js';
-import { DeterministicMockProvider } from '../../../src/analysis/semantic/mock-provider.js';
-import { TypeSafeSystemOneProvider } from '../../../src/analysis/semantic/typesafe-provider.ts';
-import { MVP_STANDARD_QUESTIONS } from '../../../src/analysis/semantic/questions.js';
-import { SecurityViolationError, ProviderError } from '../../../src/types/errors.js';
+import { SecurityViolationError } from '../../../src/types/errors.js';
 import type { DiffContext } from '../../../src/types/diff.js';
 import type { EvaluationContext } from '../../../src/types/context.js';
 
@@ -803,100 +800,4 @@ describe('Empirical Challenger M2-1: Deterministic Stress Suite', () => {
   // =========================================================================
   // 4. SEMANTIC DECISION PROVIDER OFFLINE RESILIENCE & FALLBACK INTEGRITY
   // =========================================================================
-  describe('4. Semantic Decision Provider Offline Resilience', () => {
-    it('DeterministicMockProvider is reproducible and returns identical probabilities across runs', async () => {
-      const mockProvider = new DeterministicMockProvider();
-      expect(await mockProvider.isAvailable()).toBe(true);
-
-      const context = createBaseContext({
-        raw: 'diff --git a/src/auth.ts b/src/auth.ts\n+export function login() {}\n+console.log("debug");',
-        files: [
-          {
-            newPath: 'src/auth.ts',
-            status: 'modified',
-            binary: false,
-            hunks: [],
-            additions: 2,
-            deletions: 0,
-          },
-        ],
-        insertions: 2,
-        deletions: 0,
-      });
-      context.task = {
-        task: 'Implement login and auth token support',
-        keywords: ['login', 'auth', 'token'],
-      };
-
-      const run1 = await mockProvider.evaluate(context, MVP_STANDARD_QUESTIONS);
-      const run2 = await mockProvider.evaluate(context, MVP_STANDARD_QUESTIONS);
-
-      expect(run1).toHaveLength(MVP_STANDARD_QUESTIONS.length);
-      expect(run2).toHaveLength(MVP_STANDARD_QUESTIONS.length);
-
-      for (let i = 0; i < run1.length; i++) {
-        expect(run1[i].id).toBe(run2[i].id);
-        expect(run1[i].probability).toBe(run2[i].probability);
-        expect(run1[i].score).toBe(run2[i].score);
-        expect(run1[i].value).toBe(run2[i].value);
-        expect(run1[i].confidence).toBe(run2[i].confidence);
-      }
-    });
-
-    it('TypeSafeSystemOneProvider seamlessly falls back to mock provider when API key is missing', async () => {
-      const typeSafeProvider = new TypeSafeSystemOneProvider({ apiKey: '' });
-      expect(await typeSafeProvider.isAvailable()).toBe(false);
-
-      const context = createBaseContext();
-      const decisions = await typeSafeProvider.evaluate(context, MVP_STANDARD_QUESTIONS);
-
-      expect(decisions).toHaveLength(MVP_STANDARD_QUESTIONS.length);
-      // Fallback provider fills decisions
-      expect(decisions[0].provider).toBe('mock');
-    });
-
-    it('TypeSafeSystemOneProvider throws ProviderError in strict mode when API key is missing', async () => {
-      const strictProvider = new TypeSafeSystemOneProvider({ apiKey: '', strict: true });
-
-      const context = createBaseContext();
-      await expect(
-        strictProvider.evaluate(context, MVP_STANDARD_QUESTIONS)
-      ).rejects.toThrow(ProviderError);
-    });
-
-    it('TypeSafeSystemOneProvider transparently falls back to mock provider on network error', async () => {
-      const mockFailingFetch = async () => {
-        throw new Error('Connection refused (ECONNREFUSED)');
-      };
-
-      const provider = new TypeSafeSystemOneProvider({
-        apiKey: 'fake-api-key',
-        fetchFn: mockFailingFetch as unknown as typeof fetch,
-        strict: false,
-      });
-
-      const context = createBaseContext();
-      const decisions = await provider.evaluate(context, MVP_STANDARD_QUESTIONS);
-
-      expect(decisions).toHaveLength(MVP_STANDARD_QUESTIONS.length);
-      expect(decisions[0].provider).toBe('mock');
-    });
-
-    it('TypeSafeSystemOneProvider throws ProviderError on network error when strict: true', async () => {
-      const mockFailingFetch = async () => {
-        throw new Error('Connection refused (ECONNREFUSED)');
-      };
-
-      const provider = new TypeSafeSystemOneProvider({
-        apiKey: 'fake-api-key',
-        fetchFn: mockFailingFetch as unknown as typeof fetch,
-        strict: true,
-      });
-
-      const context = createBaseContext();
-      await expect(
-        provider.evaluate(context, MVP_STANDARD_QUESTIONS)
-      ).rejects.toThrow(ProviderError);
-    });
-  });
 });

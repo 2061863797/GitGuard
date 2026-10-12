@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gitguard": {
+      "command": "node",
+      "args": ["gitguard-mcp.mjs"],
+      "cwd": "server",
+      "env_vars": ["TYPESAFE_API_KEY"]
+    }
+  }
+}

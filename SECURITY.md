@@ -1,15 +1,15 @@
 # Security Policy & Threat Model
 
-This document describes the current source behavior. An existing package or EXE must be updated to a build containing the relevant fixes; editing source does not update an installed executable.
+This document describes the current source behavior. Installed plugins run the committed bundle `plugins/gitguard/server/gitguard-mcp.mjs`; update the plugin to pick up fixes.
 
 ## Trust boundaries
 
-GitGuard reads Git repositories, runs configured local tools, and can send repository context to TypeSafe / Jev. Repository contents and model responses are untrusted input. Project check commands are executable code and require trust in the repository.
+GitGuard is an MCP server. It reads Git repositories, runs configured local tools, and sends repository context to TypeSafe / Jev when semantic questions are asked. Repository contents, agent-supplied questions and model responses are untrusted input. Project check commands are executable code and require trust in the repository; they come only from the repository `.gitguard.yml`, never from the calling agent.
 
 ```text
 Repository content
   ├─ Raw context → local deterministic checks and secret scan
-  └─ Semantic context → privacy filtering → optional online provider
+  └─ Semantic context → privacy filtering → TypeSafe (only when questions are asked)
 Finding records → current repository store → verification and state updates
 ```
 
@@ -31,15 +31,15 @@ Surrounding code and optional full-file context use the diff's new-side snapshot
 
 Configured test, lint and typecheck commands run in the repository with timeouts and without shell interpolation. Those commands can run repository scripts and write files. They are not an operating-system sandbox. Read their configuration and scripts before checking an unfamiliar repository.
 
-GitGuard can write finding and cache data under `.git/gitguard/`. An inspection summary does not run project checks or secret scanning by default. The MCP task-completion tool performs online semantic evaluation and may persist findings; it does not run local project checks.
+GitGuard writes finding records under `.git/gitguard/`. Without a `.gitguard.yml`, only the secret scan runs; test, lint and typecheck commands run only when the repository configures them.
 
 ### Provider and configuration authority
 
-Repository `.gitguard.yml` cannot disable secret redaction, include full files in semantic context, or select a custom `system_one.baseUrl` without explicit custom-provider opt-in. CLI users can opt in with `--allow-custom-provider`. Environment variables such as `TYPESAFE_BASE_URL` and programmatic SDK options are trusted caller controls, so repository-file restrictions do not automatically apply to them.
+Repository `.gitguard.yml` cannot disable secret redaction, include full files in semantic context, store an API key, or select a `system_one.baseUrl` other than the official TypeSafe endpoint. Environment variables such as `TYPESAFE_BASE_URL` and programmatic SDK options are trusted caller controls, so repository-file restrictions do not automatically apply to them.
 
 The provider uses HTTPS for remote endpoints and permits explicitly configured HTTP loopback endpoints for local use. The default endpoint is TypeSafe. Keep API keys in the caller's environment or secret manager, not in repository configuration. A trusted endpoint override determines where the API key and context are sent.
 
-MCP semantic tools require fresh TypeSafe responses and bypass semantic caching. Missing keys, failed requests, empty or invalid answers and mock/fallback decisions produce errors instead of invented success scores. Verification of unknown finding IDs stops before commands and online evaluation.
+There is no offline, mock or cached semantic mode. Every asked question needs a fresh TypeSafe answer; missing keys, failed requests and missing or invalid answers produce errors instead of invented success scores. Checks without questions make no online request. Verification of unknown finding IDs stops before commands and online evaluation.
 
 ### Finding state and verification integrity
 
@@ -49,11 +49,11 @@ Corrupt or unreadable stores stop verification. Writes use a temporary file in t
 
 The verifier also checks tracked finding content at `HEAD` to avoid resolving supported violations merely because the offending changes were committed. Finding IDs and fingerprints are not globally scoped identifiers for unrelated repositories. Reports apply to the selected targets and Git scope.
 
-An empty diff still evaluates enabled semantic rules with their configured thresholds. Global findings without affected files retain their ID when the same rule and source remain violated, even if the model's rationale or probability changes. A targeted finding resolves only when fresh evaluation no longer matches the violation; an improved probability that still requires review is not resolution.
+An empty diff asks no questions. Questions whose `files` filter matches no changed file are not sent. Verification re-asks the stored question of each targeted finding; a finding resolves only when the fresh answer is no (probability below 0.5) and deterministic checks no longer report it.
 
 ### Model limitations
 
-Typed semantic questions and response validation constrain answer shape and make provider failures visible. They do not prove model judgments correct or eliminate prompt injection in repository content. Online probabilities complement deterministic checks and human review.
+Yes/no questions and response validation constrain answer shape and make provider failures visible. They do not prove model judgments correct or eliminate prompt injection in repository content or agent-written questions. Online probabilities complement deterministic checks and human review.
 
 ## Supported versions
 
@@ -61,10 +61,10 @@ Security work targets the active release stream:
 
 | Version | Supported |
 | --- | --- |
-| 0.2.x | Yes |
-| < 0.2.0 | No |
+| 0.3.x | Yes |
+| < 0.3.0 | No |
 
-Source tests with simulated provider responses do not establish live service availability, real-model quality, installed-EXE acceptance or current remote CI status.
+Source tests with simulated provider responses do not establish live service availability, real-model quality, installed-plugin acceptance or current remote CI status.
 
 ## Reporting a vulnerability
 

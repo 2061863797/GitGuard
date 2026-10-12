@@ -1,0 +1,16 @@
+{
+  "name": "gitguard",
+  "owner": {
+    "name": "刘新涛"
+  },
+  "metadata": {
+    "description": "GitGuard: pre-commit gate for coding agents with deterministic checks and agent/user-written yes/no questions."
+  },
+  "plugins": [
+    {
+      "name": "gitguard",
+      "source": "./plugins/gitguard",
+      "description": "Pre-commit gate for agents: deterministic checks plus agent- and user-written yes/no questions."
+    }
+  ]
+}

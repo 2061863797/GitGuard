@@ -48,5 +48,11 @@ jobs:
       - name: Run Tests
         run: pnpm test
 
-      - name: Package & Distribution Smoke Test
-        run: pnpm run test:pack
+      - name: Plugin bundle is up to date
+        shell: bash
+        run: |
+          pnpm run bundle
+          git diff --exit-code -- plugins/gitguard/server/
+
+      - name: Plugin bundle smoke test
+        run: pnpm run test:bundle

@@ -1,15 +1,13 @@
 /**
  * src/policy/rules.ts
- * Standard policy rule definitions, condition evaluators, and gate verdict synthesizers.
- * Supports deterministic checks, standard System One semantic rules, custom repository rules,
- * standard thresholds, and inverted thresholds (review_below / block_below).
+ * Condition evaluators and gate verdict synthesizers.
+ * Supports deterministic checks and yes/no semantic questions with a fixed 0.5 threshold.
  */
 
 import type {
   GateVerdict,
-  PolicyRule,
-  CustomPolicyRule,
-  ThresholdConfig,
+  QuestionLevel,
+  QuestionSpec,
   RuleMatch,
   PolicyConfig,
 } from '../types/policy.js';
@@ -70,60 +68,6 @@ export function synthesizeGateVerdict(
   if (hasWarn) return 'WARN';
   return 'PASS';
 }
-
-/**
- * Canonical default standard rules configuration.
- */
-export const DEFAULT_BUILTIN_RULES: Record<string, PolicyRule> = {
-  task_completed: {
-    id: 'task_completed',
-    enabled: true,
-    description: 'Task requirement fulfillment evaluator',
-    thresholds: {
-      review_below: 0.6,
-      block_below: 0.2,
-    },
-  },
-  unrelated_changes: {
-    id: 'unrelated_changes',
-    enabled: true,
-    description: 'Unrelated and extraneous changes evaluator',
-    thresholds: {
-      warn: 0.55,
-      review: 0.75,
-      block: 0.95,
-    },
-  },
-  tests_required: {
-    id: 'tests_required',
-    enabled: true,
-    description: 'Automated regression tests requirement evaluator',
-    thresholds: {
-      warn: 0.6,
-      review: 0.8,
-    },
-  },
-  security_sensitive: {
-    id: 'security_sensitive',
-    enabled: true,
-    description: 'Security-sensitive code modification evaluator',
-    thresholds: {
-      warn: 0.5,
-      review: 0.65,
-      block: 0.9,
-    },
-  },
-  regression_risk: {
-    id: 'regression_risk',
-    enabled: true,
-    description: 'Regression risk and blast radius evaluator',
-    thresholds: {
-      warn_on: ['medium'],
-      review_on: ['high'],
-      block_on: ['critical'],
-    },
-  },
-};
 
 /**
  * Converts a simple file glob pattern (*, **) into a RegExp.
@@ -201,130 +145,31 @@ export function filterMatchingFiles(
   return matched;
 }
 
-export interface ThresholdEvaluationResult {
-  triggered: boolean;
-  status?: FindingStatus;
-  severity?: FindingSeverity;
-  message?: string;
-}
+/**
+ * Probability at or above which a question counts as answered "yes".
+ */
+export const QUESTION_YES_THRESHOLD = 0.5;
+
+const LEVEL_SEVERITY: Record<QuestionLevel, FindingSeverity> = {
+  warn: 'WARN',
+  review: 'ERROR',
+  block: 'CRITICAL',
+};
 
 /**
- * Evaluates a numerical probability against standard and inverted thresholds.
+ * Returns the changed files a question applies to, or null when its file filter matches nothing.
+ * Questions without `files` apply to every changed file.
  */
-export function evaluateNumericalThreshold(
-  probability: number,
-  thresholds: ThresholdConfig
-): ThresholdEvaluationResult {
-  // 1. Inverted thresholds: lower probability indicates failure (e.g. task_completed)
-  if (thresholds.block_below !== undefined && probability < thresholds.block_below) {
-    return {
-      triggered: true,
-      status: 'block',
-      severity: 'CRITICAL',
-      message: `Probability ${probability.toFixed(2)} is below critical block threshold of ${thresholds.block_below.toFixed(2)}`,
-    };
+export function questionAppliesTo(question: QuestionSpec, changedFiles: string[]): string[] | null {
+  if (!question.files || question.files.length === 0) {
+    const normalized = normalizeAffectedFiles(changedFiles);
+    const remaining = question.exclude?.length
+      ? normalized.filter((file) => !question.exclude!.some((pattern) => matchesGlob(file, pattern)))
+      : normalized;
+    return remaining.length > 0 ? remaining : null;
   }
-
-  if (thresholds.review_below !== undefined && probability < thresholds.review_below) {
-    return {
-      triggered: true,
-      status: 'review',
-      severity: 'ERROR',
-      message: `Probability ${probability.toFixed(2)} is below review threshold of ${thresholds.review_below.toFixed(2)}`,
-    };
-  }
-
-  // 2. Standard thresholds: higher probability indicates risk/violation
-  if (thresholds.block !== undefined && probability >= thresholds.block) {
-    return {
-      triggered: true,
-      status: 'block',
-      severity: 'CRITICAL',
-      message: `Probability ${probability.toFixed(2)} met or exceeded block threshold of ${thresholds.block.toFixed(2)}`,
-    };
-  }
-
-  if (thresholds.review !== undefined && probability >= thresholds.review) {
-    return {
-      triggered: true,
-      status: 'review',
-      severity: 'ERROR',
-      message: `Probability ${probability.toFixed(2)} met or exceeded review threshold of ${thresholds.review.toFixed(2)}`,
-    };
-  }
-
-  if (thresholds.warn !== undefined && probability >= thresholds.warn) {
-    return {
-      triggered: true,
-      status: 'warn',
-      severity: 'WARN',
-      message: `Probability ${probability.toFixed(2)} met or exceeded warn threshold of ${thresholds.warn.toFixed(2)}`,
-    };
-  }
-
-  return { triggered: false };
-}
-
-/**
- * Evaluates a categorical value or numeric score against score thresholds.
- */
-export function evaluateScoreThreshold(
-  valueOrScore: string | number,
-  thresholds: ThresholdConfig
-): ThresholdEvaluationResult {
-  if (typeof valueOrScore === 'string') {
-    const val = valueOrScore.trim().toLowerCase();
-
-    if (thresholds.block_on && thresholds.block_on.map((s) => s.toLowerCase()).includes(val)) {
-      return {
-        triggered: true,
-        status: 'block',
-        severity: 'CRITICAL',
-        message: `Score level '${valueOrScore}' matches block level [${thresholds.block_on.join(', ')}]`,
-      };
-    }
-
-    if (thresholds.review_on && thresholds.review_on.map((s) => s.toLowerCase()).includes(val)) {
-      return {
-        triggered: true,
-        status: 'review',
-        severity: 'ERROR',
-        message: `Score level '${valueOrScore}' matches review level [${thresholds.review_on.join(', ')}]`,
-      };
-    }
-
-    if (thresholds.warn_on && thresholds.warn_on.map((s) => s.toLowerCase()).includes(val)) {
-      return {
-        triggered: true,
-        status: 'warn',
-        severity: 'WARN',
-        message: `Score level '${valueOrScore}' matches warn level [${thresholds.warn_on.join(', ')}]`,
-      };
-    }
-
-    return { triggered: false };
-  }
-
-  if (typeof valueOrScore === 'number') {
-    // If numeric score supplied, evaluate against numerical thresholds if present
-    const numericResult = evaluateNumericalThreshold(valueOrScore, thresholds);
-    if (numericResult.triggered) return numericResult;
-
-    // Normalize raw score expectations (e.g. 0..4 index score where 1.05 represents low)
-    const norm = valueOrScore > 1.0 ? Math.min(1.0, valueOrScore / 4.0) : valueOrScore;
-
-    // Map normalized numeric score to conventional levels if categorical lists exist
-    let level = 'low';
-    if (norm >= 0.9) level = 'critical';
-    else if (norm >= 0.7) level = 'high';
-    else if (norm >= 0.4) level = 'medium';
-    else if (norm >= 0.2) level = 'low';
-    else level = 'negligible';
-
-    return evaluateScoreThreshold(level, thresholds);
-  }
-
-  return { triggered: false };
+  const matched = filterMatchingFiles(changedFiles, question.files, question.exclude);
+  return matched.length > 0 ? matched : null;
 }
 
 /**
@@ -487,93 +332,26 @@ export function evaluateDeterministicCheck(
 }
 
 /**
- * Resolves effective thresholds for a standard built-in rule by merging user overrides.
+ * Evaluates System One's answer to a yes/no question. "Yes" (probability >= 0.5) yields the question's level.
  */
-export function getEffectiveBuiltinRule(
-  ruleId: string,
-  policy: PolicyConfig
-): PolicyRule | null {
-  const defaultDef = DEFAULT_BUILTIN_RULES[ruleId];
-  if (!defaultDef) {
-    return null;
-  }
-
-  const userRuleConfig = policy.rules
-    ? (policy.rules as Record<string, any>)[ruleId]
-    : undefined;
-
-  if (userRuleConfig && userRuleConfig.enabled === false) {
-    return null;
-  }
-
-  const mergedThresholds: ThresholdConfig = {
-    ...defaultDef.thresholds,
-    ...userRuleConfig,
-  };
-
-  return {
-    ...defaultDef,
-    enabled: true,
-    thresholds: mergedThresholds,
-  };
-}
-
-/**
- * Evaluates a semantic decision against a policy rule.
- */
-export function evaluateSemanticRuleMatch(
+export function evaluateQuestion(
   decision: SemanticDecision,
-  rule: PolicyRule | CustomPolicyRule,
-  context: EvaluationContext,
-  matchedFiles?: string[]
+  question: QuestionSpec,
+  affectedFiles: string[]
 ): RuleMatch | null {
-  if (rule.enabled === false) {
+  if (decision.probability < QUESTION_YES_THRESHOLD) {
     return null;
   }
-
-  const thresholds: ThresholdConfig =
-    'thresholds' in rule && rule.thresholds
-      ? rule.thresholds
-      : {
-          warn: (rule as CustomPolicyRule).warn,
-          review: (rule as CustomPolicyRule).review,
-          block: (rule as CustomPolicyRule).block,
-          warn_on: (rule as CustomPolicyRule).warn_on,
-          review_on: (rule as CustomPolicyRule).review_on,
-          block_on: (rule as CustomPolicyRule).block_on,
-          review_below: (rule as CustomPolicyRule).review_below,
-          block_below: (rule as CustomPolicyRule).block_below,
-        };
-
-  let evalResult: ThresholdEvaluationResult = { triggered: false };
-
-  // 1. If probability is provided (noul / boolean)
-  if (decision.probability !== undefined) {
-    evalResult = evaluateNumericalThreshold(decision.probability, thresholds);
-  } else if (decision.value !== undefined || decision.score !== undefined) {
-    // 2. If categorical value or numeric score is provided
-    const val = decision.value ?? decision.score!;
-    evalResult = evaluateScoreThreshold(val, thresholds);
-  }
-
-  if (!evalResult.triggered || !evalResult.status || !evalResult.severity) {
-    return null;
-  }
-
-  const affectedFiles =
-    matchedFiles && matchedFiles.length > 0
-      ? matchedFiles
-      : (context.diff?.files || []).map((f) => f.newPath || f.oldPath || '');
 
   const evidence: Evidence[] = [
     {
-      type: 'behavior_change',
-      ruleName: rule.id,
-      message: decision.rationale || evalResult.message || `Semantic evaluation of '${rule.id}' triggered ${evalResult.status.toUpperCase()}`,
+      type: 'semantic_answer',
+      ruleName: question.id,
+      message: decision.rationale || `System One answered yes to: ${question.question}`,
       details: {
+        question: question.question,
+        source: question.source,
         probability: decision.probability,
-        value: decision.value,
-        score: decision.score,
         confidence: decision.confidence,
         provider: decision.provider,
       },
@@ -581,18 +359,19 @@ export function evaluateSemanticRuleMatch(
   ];
 
   return {
-    ruleId: rule.id,
+    ruleId: question.id,
     source: 'semantic',
-    status: evalResult.status,
-    severity: evalResult.severity,
-    message:
-      decision.rationale ||
-      `${rule.description || rule.id}: ${evalResult.message || 'threshold triggered'}`,
+    status: question.level,
+    severity: LEVEL_SEVERITY[question.level],
+    message: decision.rationale
+      ? `${question.question} — ${decision.rationale}`
+      : `${question.question} (yes, p=${decision.probability.toFixed(2)})`,
     probability: decision.probability,
-    score: decision.value ?? decision.score,
     affectedFiles,
     evidence,
-    expectedEvidence: [],
-    rule,
+    expectedEvidence: [
+      `Change the code so the answer to "${question.question}" becomes no, then run verify with this finding ID.`,
+    ],
+    question,
   };
 }

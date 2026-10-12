@@ -1,6 +1,6 @@
 /**
  * src/types/policy.ts
- * Policy engine configuration, rules, verdicts, and evaluation result models for GitGuard.
+ * Policy engine configuration, questions, verdicts, and evaluation result models for GitGuard.
  */
 
 import type { Finding, FindingSeverity, FindingStatus, FindingSource, Evidence } from './finding.js';
@@ -19,91 +19,32 @@ export type GateVerdict = 'PASS' | 'WARN' | 'REVIEW' | 'BLOCK';
 export type GateStatus = GateVerdict;
 
 /**
- * Threshold boundaries for numerical probabilities and categorical scores.
+ * Finding level assigned when a question is answered "yes".
  */
-export interface ThresholdConfig {
-  /** Probability threshold at or above which a WARN is triggered */
-  warn?: number;
-  /** Probability threshold at or above which a REVIEW is triggered */
-  review?: number;
-  /** Probability threshold at or above which a BLOCK is triggered */
-  block?: number;
-  /** Categorical score levels triggering WARN (e.g. ["medium"]) */
-  warn_on?: string[];
-  /** Categorical score levels triggering REVIEW (e.g. ["high"]) */
-  review_on?: string[];
-  /** Categorical score levels triggering BLOCK (e.g. ["critical"]) */
-  block_on?: string[];
-  /** Inverted threshold: trigger REVIEW if probability is BELOW this value (e.g., task_completed < 0.60) */
-  review_below?: number;
-  /** Inverted threshold: trigger BLOCK if probability is BELOW this value (e.g., task_completed < 0.20) */
-  block_below?: number;
-}
+export type QuestionLevel = 'warn' | 'review' | 'block';
 
 /**
- * Representation of a generic policy rule.
+ * Where a semantic question came from.
  */
-export interface PolicyRule {
-  /** Unique rule identifier */
-  id: string;
-  /** Whether the rule is actively evaluated */
-  enabled: boolean;
-  /** Optional human description */
-  description?: string;
-  /** Target file glob patterns */
-  files?: string[];
-  /** Excluded file glob patterns */
-  exclude?: string[];
-  /** Evaluation thresholds */
-  thresholds?: ThresholdConfig;
-  /** Natural language question for semantic evaluation */
-  question?: string;
-  /** Primitive evaluation type */
-  primitive?: 'noul' | 'boolean' | 'choice' | 'score';
-  /** Choices for categorical evaluation */
-  candidates?: string[];
-  /** Ordered levels for score evaluation */
-  scoreLevels?: string[];
-}
+export type QuestionSource = 'agent' | 'config';
 
 /**
- * User-defined custom semantic policy rule declared in .gitguard.yml.
+ * Yes/no semantic question asked to System One. Phrased so that "yes" means a problem exists.
+ * Agent-supplied questions and `.gitguard.yml` questions share this shape.
  */
-export interface CustomPolicyRule {
-  /** Unique rule identifier (e.g., "auth_requires_tests") */
+export interface QuestionSpec {
+  /** Stable identifier ([a-z0-9_]); unique across agent and config questions in one check */
   id: string;
-  /** Human description of the intent */
-  description?: string;
-  /** Target file glob patterns (e.g., ["src/auth/**"]) */
-  files: string[];
-  /** Excluded file glob patterns (e.g., ["**\/*.test.ts"]) */
-  exclude?: string[];
-  /** Natural language question asked to the Semantic Decision Layer */
+  /** Natural language question; "yes" must mean the problem exists */
   question: string;
-  /** System One primitive type (defaults to 'noul') */
-  primitive?: 'noul' | 'boolean' | 'choice' | 'score';
-  /** Candidate options if primitive is 'choice' */
-  candidates?: string[];
-  /** Score levels if primitive is 'score' */
-  scoreLevels?: string[];
-  /** Probability threshold for WARN */
-  warn?: number;
-  /** Probability threshold for REVIEW */
-  review?: number;
-  /** Probability threshold for BLOCK */
-  block?: number;
-  /** Categorical values triggering WARN */
-  warn_on?: string[];
-  /** Categorical values triggering REVIEW */
-  review_on?: string[];
-  /** Categorical values triggering BLOCK */
-  block_on?: string[];
-  /** Inverted threshold for REVIEW */
-  review_below?: number;
-  /** Inverted threshold for BLOCK */
-  block_below?: number;
-  /** Whether the rule is enabled (default: true) */
-  enabled?: boolean;
+  /** Finding level when System One answers "yes" with probability >= 0.5 */
+  level: QuestionLevel;
+  /** Optional include globs; the question is skipped when no changed file matches */
+  files?: string[];
+  /** Optional exclude globs */
+  exclude?: string[];
+  /** Origin of the question */
+  source: QuestionSource;
 }
 
 /**
@@ -127,18 +68,16 @@ export interface ContextBudgetConfig {
 }
 
 /**
- * Semantic provider integration settings in .gitguard.yml.
+ * TypeSafe System One settings in .gitguard.yml.
  */
 export interface SystemOneConfig {
-  /** Provider implementation: 'typesafe' (live API) | 'mock' (offline deterministic) */
-  provider?: 'typesafe' | 'mock' | string;
-  /** Model name or endpoint identifier (default: 'jev-latest') */
+  /** Model name (default: 'jev-latest') */
   model?: string;
   /** Request timeout in milliseconds (default: 10000) */
   timeout_ms?: number;
-  /** Optional API Key (defaults to TYPESAFE_API_KEY environment variable) */
+  /** Optional API Key (always rejected in repository files; use TYPESAFE_API_KEY) */
   apiKey?: string;
-  /** Optional base API URL (default: https://api.typesafe.ai/v1) */
+  /** Optional base API URL (only the official TypeSafe endpoint is accepted) */
   baseUrl?: string;
 }
 
@@ -183,46 +122,6 @@ export interface DeterministicPolicyConfig {
 }
 
 /**
- * Built-in standard semantic rules configuration.
- */
-export interface BuiltinRulesConfig {
-  /** Task completion evaluator (inverted thresholds: review_below, block_below) */
-  task_completed?: {
-    enabled?: boolean;
-    review_below?: number;
-    block_below?: number;
-  };
-  /** Unrelated changes evaluator */
-  unrelated_changes?: {
-    enabled?: boolean;
-    warn?: number;
-    review?: number;
-    block?: number;
-  };
-  /** Test requirements evaluator */
-  tests_required?: {
-    enabled?: boolean;
-    warn?: number;
-    review?: number;
-    block?: number;
-  };
-  /** Security sensitive changes evaluator */
-  security_sensitive?: {
-    enabled?: boolean;
-    warn?: number;
-    review?: number;
-    block?: number;
-  };
-  /** Regression risk evaluator */
-  regression_risk?: {
-    enabled?: boolean;
-    warn_on?: string[];
-    review_on?: string[];
-    block_on?: string[];
-  };
-}
-
-/**
  * Privacy and secret redaction settings.
  */
 export interface PrivacyConfig {
@@ -246,20 +145,10 @@ export interface PolicyConfig {
   system_one?: SystemOneConfig;
   /** Deterministic command configurations */
   deterministic?: DeterministicPolicyConfig;
-  /** Standard built-in rule thresholds */
-  rules?: BuiltinRulesConfig;
-  /** Custom repository semantic rules */
-  custom_rules?: CustomPolicyRule[];
+  /** User-written semantic questions asked on every check */
+  questions?: QuestionSpec[];
   /** Privacy and data exclusion configuration */
   privacy?: PrivacyConfig;
-  /** Gate execution policy */
-  gate?: {
-    block_on?: GateVerdict[];
-    cache?: {
-      enabled?: boolean;
-      directory?: string;
-    };
-  };
 }
 
 /**
@@ -278,16 +167,14 @@ export interface RuleMatch {
   message: string;
   /** Numerical probability value, if applicable */
   probability?: number;
-  /** Categorical score value, if applicable */
-  score?: string | number;
   /** Affected files */
   affectedFiles: string[];
   /** Supporting evidence */
   evidence: Evidence[];
   /** Actionable resolution instructions */
   expectedEvidence: string[];
-  /** Originating policy rule definition */
-  rule?: PolicyRule | CustomPolicyRule;
+  /** Originating question for semantic matches */
+  question?: QuestionSpec;
 }
 
 /**
@@ -313,11 +200,12 @@ export interface PolicyEvaluationResult {
  */
 export interface PolicyEngine {
   /**
-   * Evaluates deterministic results and semantic decisions against policy rules to produce the final verdict.
+   * Evaluates deterministic results and answers to the asked questions to produce the final verdict.
    */
   evaluate(
     deterministicResults: DeterministicResult[],
     semanticDecisions: SemanticDecision[],
+    questions: QuestionSpec[],
     policy: PolicyConfig,
     context: EvaluationContext
   ): PolicyEvaluationResult;

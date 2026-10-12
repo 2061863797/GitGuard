@@ -145,8 +145,8 @@ export interface VerificationReportMetadata {
   gitRoot: string;
   /** HEAD commit SHA at verification time */
   headSha: string;
-  /** Whether results were retrieved from evaluation cache */
-  cacheHit: boolean;
+  /** Number of semantic questions sent to System One (0 when skipped) */
+  questionsAsked?: number;
   /**
    * Whether finding persistence to the repository store succeeded.
    * `false` means findings were computed but NOT saved: a later `verify()`

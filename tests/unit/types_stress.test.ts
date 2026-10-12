@@ -30,7 +30,6 @@ import {
   type DeterministicResult,
   type DeterministicConfig,
   type DeterministicChecker,
-  type StandardQuestionId,
   type SemanticQuestion,
   type SemanticDecision,
   type DecisionProvider,
@@ -45,15 +44,11 @@ import {
   type IFindingManager,
   type GateVerdict,
   type GateStatus,
-  type ThresholdConfig,
-  type PolicyRule,
-  type CustomPolicyRule,
+  type QuestionSpec,
   type PolicyConfig,
   type RuleMatch,
   type PolicyEvaluationResult,
   type PolicyEngine,
-  type InspectOptions,
-  type InspectResult,
   type CheckOptions,
   type CheckResult,
   type VerifyOptions,
@@ -64,7 +59,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
   describe('1. Version and Export Soundness', () => {
     it('should export GITGUARD_VERSION matching semver format', () => {
       expect(GITGUARD_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
-      expect(GITGUARD_VERSION).toBe('0.2.5');
+      expect(GITGUARD_VERSION).toBe('0.3.0');
     });
   });
 
@@ -263,21 +258,16 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
       expect(lifecycles).toHaveLength(3);
     });
 
-    it('should validate StandardQuestionId canonical list', () => {
-      const questions: StandardQuestionId[] = [
-        'task_completed',
-        'task_scope_match',
-        'unrelated_changes',
-        'tests_required',
-        'tests_present',
-        'behavior_change',
-        'security_sensitive_change',
-        'breaking_change',
-        'debug_leftovers',
-        'regression_risk',
-        'change_type',
-      ];
-      expect(questions).toHaveLength(11);
+    it('should validate QuestionSpec levels and sources', () => {
+      const question: QuestionSpec = {
+        id: 'float_money',
+        question: 'Does this change compute money with floating point?',
+        level: 'block',
+        files: ['src/billing/**'],
+        source: 'agent',
+      };
+      expect(['warn', 'review', 'block']).toContain(question.level);
+      expect(['agent', 'config']).toContain(question.source);
     });
   });
 
@@ -426,7 +416,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
           timestamp: '2026-09-20T00:00:00Z',
           gitRoot: 'C:/Users/LXT/Desktop/GitGuard',
           headSha: 'abc1234',
-          cacheHit: false,
+          questionsAsked: 1,
         },
       };
 
@@ -444,7 +434,6 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
           surrounding_lines: 30,
         },
         system_one: {
-          provider: 'typesafe',
           model: 'jev',
           timeout_ms: 5000,
         },
@@ -460,26 +449,14 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
             patterns: ['AKIA[0-9A-Z]{16}'],
           },
         },
-        rules: {
-          task_completed: {
-            enabled: true,
-            review_below: 0.6,
-            block_below: 0.2,
-          },
-          unrelated_changes: {
-            enabled: true,
-            warn: 0.4,
-            review: 0.7,
-            block: 0.9,
-          },
-        },
-        custom_rules: [
+        questions: [
           {
             id: 'no_console_logs',
             files: ['src/**/*.ts'],
             exclude: ['**/*.test.ts'],
             question: 'Does the diff contain console.log statements?',
-            warn: 0.5,
+            level: 'warn',
+            source: 'config',
           },
         ],
         privacy: {
@@ -490,27 +467,17 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
 
       expect(policy.version).toBe(1);
       expect(policy.deterministic?.test?.enabled).toBe(true);
-      expect(policy.rules?.task_completed?.review_below).toBe(0.6);
-      expect(policy.custom_rules?.[0].id).toBe('no_console_logs');
+      expect(policy.questions?.[0].id).toBe('no_console_logs');
     });
   });
 
   describe('5. Component Interface Contract Soundness', () => {
     it('should implement GitGuardEngine interface without compilation error', async () => {
       class MockGitGuardEngine implements GitGuardEngine {
-        async inspect(_options: InspectOptions): Promise<InspectResult> {
-          return {
-            status: 'PASS',
-            summary: { filesChanged: 0, insertions: 0, deletions: 0 },
-            changedFiles: [],
-            findings: [],
-            hasDeterministicFailures: false,
-          };
-        }
-
         async check(_options: CheckOptions): Promise<CheckResult> {
           return {
             status: 'PASS',
+            canCommit: true,
             verdictSummary: 'All checks passed',
             diffSummary: { filesChanged: 0, insertions: 0, deletions: 0 },
             findings: [],
@@ -523,9 +490,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
               timestamp: '2026-09-20T00:00:00Z',
               gitRoot: '/test',
               headSha: '000000',
-              cacheHit: false,
             },
-            exitCode: 0,
           };
         }
 
@@ -544,7 +509,6 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
               timestamp: '2026-09-20T00:00:00Z',
               gitRoot: '/test',
               headSha: '000000',
-              cacheHit: false,
             },
           };
         }
@@ -555,12 +519,9 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
       }
 
       const engine: GitGuardEngine = new MockGitGuardEngine();
-      const inspectRes = await engine.inspect({});
-      expect(inspectRes.status).toBe('PASS');
-
       const checkRes = await engine.check({});
       expect(checkRes.status).toBe('PASS');
-      expect(checkRes.exitCode).toBe(0);
+      expect(checkRes.canCommit).toBe(true);
 
       const verifyRes = await engine.verify({ findingIds: ['f1'] });
       expect(verifyRes.resolved).toEqual(['f1']);
@@ -635,7 +596,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
       const provider: DecisionProvider = new MockDecisionProvider();
       expect(await provider.isAvailable()).toBe(true);
       const res = await provider.evaluate({} as any, [
-        { id: 'task_completed', type: 'boolean', prompt: 'Is task complete?' },
+        { id: 'task_completed', prompt: 'Is task incomplete?' },
       ]);
       expect(res[0].probability).toBe(0.5);
     });
@@ -645,6 +606,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
         evaluate(
           _deterministicResults: DeterministicResult[],
           _semanticDecisions: SemanticDecision[],
+          _questions: QuestionSpec[],
           _policy: PolicyConfig,
           _context: EvaluationContext
         ): PolicyEvaluationResult {
@@ -660,7 +622,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
       }
 
       const engine: PolicyEngine = new MockPolicyEngine();
-      const res = engine.evaluate([], [], { version: 1 }, {} as any);
+      const res = engine.evaluate([], [], [], { version: 1 }, {} as any);
       expect(res.verdict).toBe('PASS');
     });
 
@@ -723,7 +685,6 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
               timestamp: new Date().toISOString(),
               gitRoot: '/repo',
               headSha: 'abc',
-              cacheHit: false,
             },
           };
         }
@@ -733,23 +694,6 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
       expect(fm.computeFingerprint({ ruleId: 'r1', affectedFiles: ['a.ts'], normalizedDiffHunks: 'diff' })).toBe('fingerprint_abc123');
       const report = fm.resolveFindings([], []);
       expect(report.status).toBe('PASS');
-    });
-
-    it('should allow primitive: boolean in PolicyRule and CustomPolicyRule', () => {
-      const rule: PolicyRule = {
-        enabled: true,
-        primitive: 'boolean',
-        question: 'Are tests required?',
-      };
-      const customRule: CustomPolicyRule = {
-        id: 'auth_tests',
-        files: ['src/auth/**'],
-        question: 'Are tests adequate?',
-        primitive: 'boolean',
-        warn: 0.7,
-      };
-      expect(rule.primitive).toBe('boolean');
-      expect(customRule.primitive).toBe('boolean');
     });
   });
 
@@ -787,16 +731,6 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
       };
       expect(emptyDiff.files).toHaveLength(0);
       expect(emptyDiff.truncated).toBe(false);
-    });
-
-    it('should support inverted threshold configurations for task completion', () => {
-      const threshold: ThresholdConfig = {
-        review_below: 0.60,
-        block_below: 0.20,
-      };
-      expect(threshold.review_below).toBe(0.60);
-      expect(threshold.block_below).toBe(0.20);
-      expect(threshold.warn).toBeUndefined();
     });
 
     it('should support finding without optional fields', () => {

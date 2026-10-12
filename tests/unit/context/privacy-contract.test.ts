@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeEvaluationContext, redactSecrets, omitSensitiveDiffHunks, REDACTION_TOKEN } from '../../../src/context/filter.js';
 import { parseDiff, parseDiffGitPaths } from '../../../src/git/diff-parser.js';
 import { TypeSafeSystemOneProvider } from '../../../src/analysis/semantic/typesafe-provider.js';
-import { STANDARD_QUESTIONS_MAP } from '../../../src/analysis/semantic/questions.js';
 import { GITGUARD_VERSION } from '../../../src/version.js';
 import { scanDiffForSecrets } from '../../../src/analysis/deterministic/secrets.js';
 import type { EvaluationContext } from '../../../src/types/context.js';
@@ -48,7 +47,7 @@ describe('Privacy and Git path contracts', () => {
     expect(sanitized.task?.keywords).toEqual(['update']);
     let body = '';
     const provider = new TypeSafeSystemOneProvider({
-      apiKey: 'synthetic-test-key', strict: true,
+      apiKey: 'synthetic-test-key',
       fetchFn: (async (_url, init) => {
         body = String(init?.body);
         return new Response(JSON.stringify({ model: 'jev-test', answers: {
@@ -56,7 +55,7 @@ describe('Privacy and Git path contracts', () => {
         } }), { status: 200 });
       }) as typeof fetch,
     });
-    await provider.evaluate(sanitized, [STANDARD_QUESTIONS_MAP.task_completed]);
+    await provider.evaluate(sanitized, [{ id: 'task_completed', prompt: 'Does this change fail to fulfil the task?' }]);
     expect(body).not.toContain(secret);
     expect(body).toContain(REDACTION_TOKEN);
     expect(context.diff.raw).toContain(secret);
@@ -101,7 +100,7 @@ describe('Privacy and Git path contracts', () => {
     let body = '';
     let userAgent = '';
     const provider = new TypeSafeSystemOneProvider({
-      apiKey: 'synthetic-test-key', strict: true,
+      apiKey: 'synthetic-test-key',
       fetchFn: (async (_url, init) => {
         body = String(init?.body);
         userAgent = new Headers(init?.headers).get('User-Agent') || '';
@@ -110,7 +109,7 @@ describe('Privacy and Git path contracts', () => {
         } }), { status: 200 });
       }) as typeof fetch,
     });
-    await provider.evaluate(sanitizeEvaluationContext(evaluationContext()), [STANDARD_QUESTIONS_MAP.task_completed]);
+    await provider.evaluate(sanitizeEvaluationContext(evaluationContext()), [{ id: 'task_completed', prompt: 'Does this change fail to fulfil the task?' }]);
     expect(userAgent).toBe('GitGuard/' + GITGUARD_VERSION);
     expect(JSON.parse(body).state.keywords).toEqual(['update']);
     for (const secret of [githubToken, awsToken, awsToken.toLowerCase(), opaqueToken]) expect(body).not.toContain(secret);

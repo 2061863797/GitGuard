@@ -13,7 +13,6 @@ const config = {
     test: { enabled: false }, lint: { enabled: false }, typecheck: { enabled: false },
     secret_scan: { enabled: true, block_on_detection: true },
   },
-  rules: { tests_required: { enabled: false } },
 };
 const secret = ['ghp', '123456789012345678901234567890123456'].join('_');
 
@@ -39,7 +38,7 @@ describe('Engine repository isolation and revision ranges', () => {
   async function detectSecret() {
     await repository.writeFile('secret.ts', 'const key = "' + secret + '";\n');
     await repository.stage();
-    const result = await engine.check({ cwd: repository.path, scope: 'staged', config, onlineOnly: true, noCache: true });
+    const result = await engine.check({ cwd: repository.path, scope: 'staged', config });
     const finding = result.findings.find((entry) => entry.ruleId === 'deterministic.secret_scan')!;
     expect(result.status).toBe('BLOCK');
     expect(finding).toBeDefined();
@@ -60,7 +59,7 @@ describe('Engine repository isolation and revision ranges', () => {
     evaluate.mockClear();
 
     const result = await engine.verify({
-      cwd: other.path, findingIds: [finding.id], config, onlineOnly: true, noCache: true,
+      cwd: other.path, findingIds: [finding.id], config,
     });
 
     expect(result.status).toBe('BLOCK');
@@ -74,7 +73,7 @@ describe('Engine repository isolation and revision ranges', () => {
   it('keeps bulk verification confined to active findings in the current repository', async () => {
     await detectSecret();
     const other = await createCleanOtherRepository();
-    const result = await engine.verify({ cwd: other.path, config, onlineOnly: true, noCache: true });
+    const result = await engine.verify({ cwd: other.path, config });
     expect(result.status).toBe('PASS');
     expect(result.resolved).toEqual([]);
     expect(result.remaining).toEqual([]);
@@ -84,7 +83,7 @@ describe('Engine repository isolation and revision ranges', () => {
   it('reports partially unknown IDs accurately and leaves known records active without evaluation', async () => {
     const finding = await detectSecret();
     evaluate.mockClear();
-    const result = await engine.verify({ cwd: repository.path, findingIds: [finding.id, 'missing'], config, onlineOnly: true, noCache: true });
+    const result = await engine.verify({ cwd: repository.path, findingIds: [finding.id, 'missing'], config });
     expect(result.status).toBe('BLOCK');
     expect(result.verdictSummary).toContain('Some targeted finding ID(s) are unknown');
     expect(result.unknownFindings).toEqual(['missing']);
@@ -101,7 +100,7 @@ describe('Engine repository isolation and revision ranges', () => {
     await repository.stage();
 
     const result = await engine.verify({
-      cwd: repository.path, findingIds: [finding.id], config, onlineOnly: true, noCache: true,
+      cwd: repository.path, findingIds: [finding.id], config,
     });
     expect(result.resolved).toContain(finding.id);
     expect(result.status).toBe('PASS');
@@ -115,7 +114,7 @@ describe('Engine repository isolation and revision ranges', () => {
     await repository.stage();
 
     const result = await engine.verify({
-      cwd: repository.path, findingIds: [finding.id], config, onlineOnly: true, noCache: true,
+      cwd: repository.path, findingIds: [finding.id], config,
     });
     expect(result.resolved).toContain(finding.id);
     expect(result.status).toBe('PASS');
@@ -128,8 +127,8 @@ describe('Engine repository isolation and revision ranges', () => {
     await other.writeFile('safe.ts', 'export const safe = true;\n');
 
     const [first, second] = await Promise.all([
-      engine.check({ cwd: repository.path, scope: 'staged', config, onlineOnly: true, noCache: true }),
-      engine.check({ cwd: other.path, scope: 'all', config, onlineOnly: true, noCache: true }),
+      engine.check({ cwd: repository.path, scope: 'staged', config }),
+      engine.check({ cwd: other.path, scope: 'all', config }),
     ]);
     expect(first.status).toBe('BLOCK');
     expect(first.findings.every((finding) => finding.provenance?.repositoryRoot === repository.path)).toBe(true);
@@ -137,7 +136,7 @@ describe('Engine repository isolation and revision ranges', () => {
     expect(second.findings).toEqual([]);
 
     const verification = await engine.verify({
-      cwd: other.path, findingIds: first.findings.map((finding) => finding.id), config, onlineOnly: true, noCache: true,
+      cwd: other.path, findingIds: first.findings.map((finding) => finding.id), config,
     });
     expect(verification.status).toBe('BLOCK');
     expect(verification.unknownFindings).toEqual(first.findings.map((finding) => finding.id));
@@ -148,7 +147,7 @@ describe('Engine repository isolation and revision ranges', () => {
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     const corrupt = '{ invalid json';
     await fs.writeFile(storePath, corrupt);
-    await expect(engine.verify({ cwd: repository.path, config, onlineOnly: true, noCache: true }))
+    await expect(engine.verify({ cwd: repository.path, config }))
       .rejects.toMatchObject({ code: 'FINDING_STORE_CORRUPT' });
     expect(evaluate).not.toHaveBeenCalled();
     expect(await fs.readFile(storePath, 'utf8')).toBe(corrupt);
@@ -161,8 +160,8 @@ describe('Engine repository isolation and revision ranges', () => {
     await repository.writeFile('later.txt', 'later\n');
     await repository.stage();
     await repository.commit('later');
-    const result = await engine.inspect({ cwd: repository.path, target: first });
-    expect(result.changedFiles.map((file) => file.path)).toEqual(['first.txt']);
+    const result = await engine.check({ cwd: repository.path, target: first, config });
+    expect(result.diffSummary.filesChanged).toBe(1);
   });
 
   it.runIf(process.platform === 'win32')('blocks verification when a read-only store cannot persist resolution', async () => {
@@ -172,7 +171,7 @@ describe('Engine repository isolation and revision ranges', () => {
     try {
       await repository.writeFile('secret.ts', 'const key = "public";\n');
       await repository.stage();
-      const result = await engine.verify({ cwd: repository.path, findingIds: [finding.id], config, onlineOnly: true, noCache: true });
+      const result = await engine.verify({ cwd: repository.path, findingIds: [finding.id], config });
       expect(result.status).toBe('BLOCK');
       expect(result.allResolved).toBe(false);
       expect(result.metadata.persistenceOk).toBe(false);
@@ -196,18 +195,18 @@ describe('Engine repository isolation and revision ranges', () => {
     await repository.stage();
     await repository.commit('other');
 
-    const mergeBase = await engine.inspect({ cwd: repository.path, target: 'other...feature' });
-    const endpoints = await engine.inspect({ cwd: repository.path, target: 'other..feature' });
-    expect(mergeBase.changedFiles.map((file) => file.path)).toEqual(['feature.txt']);
-    expect(endpoints.changedFiles.map((file) => file.path).sort()).toEqual(['feature.txt', 'other.txt']);
-    const verified = await engine.verify({ cwd: repository.path, target: 'other...feature', config, onlineOnly: true, noCache: true });
+    const mergeBase = await engine.check({ cwd: repository.path, target: 'other...feature', config });
+    const endpoints = await engine.check({ cwd: repository.path, target: 'other..feature', config });
+    expect(mergeBase.diffSummary.filesChanged).toBe(1);
+    expect(endpoints.diffSummary.filesChanged).toBe(2);
+    const verified = await engine.verify({ cwd: repository.path, target: 'other...feature', config });
     expect(verified.diffSummary.filesChanged).toBe(1);
   });
 
   it.each(['..', 'main..', '..head', '...', 'main...', '...head', 'main....head', 'a..b..c', 'a...b...c', 'a..b...c'])(
     'rejects an incomplete or ambiguous range %s',
     async (target) => {
-      await expect(engine.inspect({ cwd: repository.path, target })).rejects.toThrow(InvalidGitRefError);
+      await expect(engine.check({ cwd: repository.path, target, config })).rejects.toThrow(InvalidGitRefError);
     }
   );
 });
