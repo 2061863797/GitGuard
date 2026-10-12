@@ -1,6 +1,6 @@
 {
   "name": "gitguard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Pre-commit gate for agents: secret scan, repository test/lint/typecheck commands, and task-specific rules judged by TypeSafe System One.",
   "author": {
     "name": "刘新涛"

@@ -5,7 +5,7 @@
 
 GitGuard 是给 AI 编程 agent 用的**提交前检查**。agent 写完代码、准备提交时调用它，它检查 Git 仓库里的改动，给出 `PASS`、`WARN`、`REVIEW` 或 `BLOCK`，并列出带 ID 的问题（finding）。agent 修完后再用这些 ID 复验。
 
-GitGuard 只负责检查：不改代码，不执行 `git add`、`commit`、`push`。
+GitGuard 只负责检查：不改你的代码，不执行 `git add`、`commit`、`push`。它唯一会写的地方是 `.git/` 目录里的检查记录，以及开启提交拦截时安装的 `.git/hooks/pre-commit`。
 
 ## 它检查什么
 
@@ -21,7 +21,9 @@ GitGuard 只负责检查：不改代码，不执行 `git add`、`commit`、`push
 
 **没有规则时不需要 API 密钥**，只跑确定性检查。有规则时必须设置 `TYPESAFE_API_KEY`；如果缺少密钥或请求失败，GitGuard 会直接报错，不会用本地猜测的结果代替。
 
-**提交前强制检查**：仓库里有 `.gitguard.yml` 时，插件自带的 hook 会在 agent 执行 `git commit` 之前做确认。最近一次检查必须覆盖了这次要提交的内容，并且结论不是 `BLOCK`，否则提交会被拦截。这只约束 agent，你自己在终端里提交不受影响。详见[提交拦截](#提交拦截)。
+**提交前强制检查**：仓库里有 `.gitguard.yml` 时，`check` 会安装一个 Git 的 pre-commit 钩子。之后每次提交，最近一次检查都必须覆盖了这次要提交的内容，并且结论不是 `BLOCK`，否则提交会被拒绝。人可以用 `git commit --no-verify` 跳过一次；agent 想跳过时，会被插件拦下。详见[提交拦截](#提交拦截)。
+
+**测试结果缓存**：测试、lint、类型检查通过后，只要代码和命令都没变，再次检查就直接复用上次的结果，不会重跑。
 
 ## 安装
 
@@ -34,7 +36,7 @@ GitGuard 只负责检查：不改代码，不执行 `git add`、`commit`、`push
 /plugin install gitguard
 ```
 
-安装后会得到 `gitguard` MCP 服务、两个 skill 和提交拦截 hook：
+安装后会得到 `gitguard` MCP 服务、两个 skill 和一个防止跳过检查的 hook：
 - `gitguard` skill 告诉 agent 什么时候检查、怎么写规则、怎么处理结果；
 - `gitguard-setup` skill 引导 agent 帮你创建 `.gitguard.yml`。
 
@@ -66,7 +68,7 @@ codex plugin marketplace add 2061863797/GitGuard
 
 `env` 的写法因客户端而异，按客户端的说明转发环境变量即可。如果客户端支持 SKILL.md 格式的 skill，把 [`plugins/gitguard/skills`](plugins/gitguard/skills) 下的两个目录拷进它的 skills 目录。如果项目命令跑得比较久，记得把客户端对 MCP 工具调用的等待上限调大。不支持 skill 的客户端仍会通过 MCP 的 server instructions 和工具描述拿到核心规则。
 
-提交拦截依赖客户端的 PreToolUse hook。如果客户端支持同样格式的 hook（命令从 stdin 读事件 JSON，退出码 2 表示拦截），可以参照 [`plugins/gitguard/hooks/hooks.json`](plugins/gitguard/hooks/hooks.json) 配置；不支持的客户端只能靠 skill 提醒 agent 自觉检查。
+提交拦截本身靠 Git 的 pre-commit 钩子，任何客户端都会生效。插件里另有一个 PreToolUse hook，用来拦住 agent 用 `--no-verify` 等方式跳过钩子。如果客户端支持同样格式的 hook（命令从 stdin 读事件 JSON，退出码 2 表示拦截），可以参照 [`plugins/gitguard/hooks/hooks.json`](plugins/gitguard/hooks/hooks.json) 配置。
 
 ## 设置 API 密钥
 
@@ -157,6 +159,7 @@ secret_scan:
 - `ruleResults`：每条规则是否被违反（`violated`）、概率和理由。
 - `findings`：每个问题的 `id`、对应规则（`rule`、`ruleSource`）和修复建议。
 - `diffSummary`：改动统计。
+- `metadata.commitHook`：仓库开启了 GitGuard 时，pre-commit 钩子是否装上；没装上会写明原因。
 
 ### `verify`
 
@@ -166,7 +169,9 @@ secret_scan:
 | `findingIds` | 之前 `check` 返回的 finding ID |
 | `scope`、`target`、`task` | 同 `check` |
 
-`verify` 会重新跑确定性检查，并重新判断当初产生这些 finding 的规则，不需要 agent 再传一遍。传入当前仓库不存在的 ID 时，会直接返回 `BLOCK` 和 `unknownFindings`，不执行任何命令，也不联网。
+`verify` 会重新跑确定性检查，并重新判断当初产生这些 finding 的规则，不需要 agent 再传一遍。
+
+agent 写的规则只要对应的 finding 还没解决（并且 HEAD 没变），之后的 `check` 也会自动继续判断它们。agent 不能靠下次不传、换个说法或降低 `level` 来过关。传入当前仓库不存在的 ID 时，会直接返回 `BLOCK` 和 `unknownFindings`，不执行任何命令，也不联网。
 
 ### 开 PR 前检查整个分支
 
@@ -185,29 +190,41 @@ secret_scan:
 
 ## 提交拦截
 
-只在仓库根目录有 `.gitguard.yml` 时生效；没有这个文件的仓库不受任何影响。
+只在开启了 GitGuard 的仓库里生效：仓库根目录有 `.gitguard.yml`，或者 HEAD 里有这个文件。所以在工作区里删掉它，并不能关掉拦截。没开启的仓库不受任何影响。
 
-1. 每次 `check` 或 `verify`（范围是 `all`、`staged` 或 `working`）结束时，GitGuard 把这次检查覆盖的每个文件的内容指纹、当时的 HEAD 和检查结论，记到 `.git/gitguard/last-check.json`。指纹用的是 Git 的 blob ID，所以 Windows 下的换行符差异不会造成误判。
-2. agent 通过 Bash 或 PowerShell 工具执行包含 `git commit` 的命令前，hook 会算出这次要提交的内容，并检查下面四项，任何一项不满足都会拦截（退出码 2），同时告诉 agent 该怎么做：
+1. **记录**：每次 `check` 或 `verify`（范围是 `all`、`staged` 或 `working`）结束时，GitGuard 把这几样东西记到 `.git/gitguard/last-check.json`：
+   - 这次检查覆盖的每个文件的内容指纹（Git 的 blob ID，所以 Windows 下的换行符差异不会误判；子模块记录它当前的提交）；
+   - 当时的 HEAD；
+   - 检查结论。
+2. **安装钩子**：开启了 GitGuard 的仓库，`check` 会把钩子写到 `.git/hooks/pre-commit`。以下情况不会覆盖，会在 `metadata.commitHook` 里说明原因，需要你手动把 `node <插件目录>/server/gitguard-pre-commit.mjs` 接进现有钩子：
+   - 已经有一个不是 GitGuard 装的 pre-commit 钩子；
+   - 用了 husky 这类设置了 `core.hooksPath` 的工具。
+3. **拦截**：每次 `git commit`，钩子拿 Git **真正要提交的内容**和检查记录比对，下面任何一项不满足都会拒绝提交，并说明该怎么做：
    - 有检查记录；
    - HEAD 没变；
-   - 每个要提交的文件都和检查时的内容一致；
+   - 每个要提交的文件都和检查时一致；
    - 结论不是 `BLOCK`。
-3. `REVIEW` 和 `WARN` 不拦截，交给 agent 转告你。
 
-几种写法的处理：
-- `git commit -a`：未暂存的已跟踪改动也会提交，所以这些改动也要被检查过。
-- 同一条命令里先 `git add` / `git rm` / `git mv` 再提交：因为 hook 在整条命令执行前运行，所以要求**所有**未提交的改动都被检查过。
-- `cd 目录 && git commit`、`Set-Location 目录; git commit`、`git -C 目录 commit`：按实际仓库判断。
-- 不在 Git 仓库里、或者 Git 出错时：hook 直接放行，不影响无关命令。
+   `REVIEW` 和 `WARN` 不拦截，交给 agent 转告你。
+4. **防止跳过**：插件的 PreToolUse hook 会拦下 agent 的这些命令（嵌套在 `bash -c "…"` 里也一样）：
+   - `--no-verify`、`git commit -n`；
+   - 修改 `core.hooksPath`；
+   - 改动 `.git/hooks/` 或 `.git/gitguard/`。
 
-这个拦截只针对 agent 通过 shell 工具发起的提交，挡的是“忘了检查”，不是安全边界：你自己在终端里提交不受影响，agent 也能通过修改 hook 配置等方式绕过（skill 里已明确禁止）。
+因为钩子由 Git 自己触发，所以 `git commit -a`、`git commit 文件名`、git 别名、在 `bash -c` 或 `pwsh -Command` 里提交，都会被同样检查。
+
+几点说明：
+- **你自己提交也会被检查。** 想跳过一次就用 `git commit --no-verify`。
+- **`merge`、`cherry-pick`、`revert` 不经过 pre-commit 钩子。** 这些命令带进来的是其他分支上已经提交过的内容。
+- **钩子出错时会拒绝提交。** 比如找不到 Node.js，或者插件被移动了位置。提示里会说明原因；重新跑一次 `check` 会把钩子指向新的位置。
+- **要卸载**，删掉 `.git/hooks/pre-commit` 即可。
+- **它挡的是“忘了检查”，不是安全边界。** 能任意执行命令的人或程序总有办法绕过。
 
 ## 安全
 
 - 测试、lint、类型检查命令会在被检查仓库里执行，可能运行项目脚本、写入文件。只检查你信任的仓库。
 - 发给模型的内容会排除敏感文件，并对已知格式的密钥脱敏；本地密钥扫描使用未脱敏的原始改动。脱敏基于规则，不能保证识别所有秘密。
-- finding 记录保存在被检查仓库的 `.git/gitguard/` 下。
+- finding 记录、检查记录和测试结果缓存保存在被检查仓库的 `.git/gitguard/` 下。测试结果缓存只看代码和命令，不看依赖、`.env` 这类被 Git 忽略的文件。如果你改了这些文件、想强制重跑，删掉 `.git/gitguard/command-cache.json` 即可。
 
 详细的威胁模型见 [SECURITY.md](SECURITY.md)。
 
@@ -218,16 +235,21 @@ pnpm install
 pnpm lint
 pnpm typecheck
 pnpm test          # 会先执行 pnpm build
-pnpm bundle        # 重新生成 plugins/gitguard/server/gitguard-mcp.mjs
+pnpm bundle        # 重新生成 plugins/gitguard/server/ 下的三个打包文件
 pnpm test:bundle   # 从插件目录启动打包产物做冒烟测试
 ```
 
-插件安装时不会执行 `npm install`，所以打包产物 `plugins/gitguard/server/gitguard-mcp.mjs`（MCP 服务）和 `gitguard-hook.mjs`（提交拦截）需要提交进仓库。改了 `src/` 后要运行 `pnpm bundle`，CI 会检查产物是否最新。
+插件安装时不会执行 `npm install`，所以 `plugins/gitguard/server/` 下的三个打包文件需要提交进仓库：
+- `gitguard-mcp.mjs`：MCP 服务；
+- `gitguard-pre-commit.mjs`：Git 提交拦截；
+- `gitguard-hook.mjs`：防止 agent 跳过检查。
+
+改了 `src/` 后要运行 `pnpm bundle`，CI 会检查产物是否最新。
 
 发布新版本时，要同步更新这几处的版本号：`package.json`、`src/version.ts`、`plugins/gitguard/.claude-plugin/plugin.json`、`plugins/gitguard/.codex-plugin/plugin.json`。
 
 ```text
-src/                     MCP 服务源码（引擎、Git 读取、上下文、检查、策略、finding）
+src/                     源码：MCP 服务、引擎、Git 读取、上下文、检查、策略、finding、提交拦截
 plugins/gitguard/        插件本体：两份清单、Codex 的 MCP 配置、两个 skill、hook、打包产物
 .claude-plugin/          Claude Code 插件市场
 .agents/plugins/         Codex 插件市场

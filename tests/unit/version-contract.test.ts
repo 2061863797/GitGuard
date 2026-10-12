@@ -18,7 +18,7 @@ const readJson = (relativePath: string) =>
 
 describe('Version Alignment Contract', () => {
   it('package.json and both plugin manifests match GITGUARD_VERSION', () => {
-    expect(GITGUARD_VERSION).toBe('0.3.0');
+    expect(GITGUARD_VERSION).toBe('0.4.0');
     expect(readJson('package.json').version).toBe(GITGUARD_VERSION);
     expect(readJson('plugins/gitguard/.claude-plugin/plugin.json').version).toBe(GITGUARD_VERSION);
     expect(readJson('plugins/gitguard/.codex-plugin/plugin.json').version).toBe(GITGUARD_VERSION);
@@ -45,6 +45,7 @@ describe('Version Alignment Contract', () => {
     expect(group.hooks[0].command).toContain("'server','gitguard-hook.mjs'");
     expect(group.hooks[0].command).toContain('process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT');
     expect(fs.existsSync(path.resolve('plugins/gitguard/server/gitguard-hook.mjs'))).toBe(true);
+    expect(fs.existsSync(path.resolve('plugins/gitguard/server/gitguard-pre-commit.mjs'))).toBe(true);
   });
 
   it('MCP server initialization reports version strictly matching GITGUARD_VERSION', async () => {

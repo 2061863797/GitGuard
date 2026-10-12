@@ -1,17 +1,14 @@
 /**
  * src/hook.ts
- * PreToolUse hook entrypoint shared by the Claude Code and Codex plugins (Bash and PowerShell tools).
- * Reads the hook event from stdin; for an agent `git commit` in a GitGuard-enabled repository,
- * exits with code 2 (block) unless the last GitGuard check covered the content being committed
- * and was not BLOCK. Anything unexpected lets the command proceed.
+ * PreToolUse hook shared by the Claude Code and Codex plugins (Bash and PowerShell tools).
+ * Commits themselves are gated by the Git pre-commit hook; this only stops an agent from skipping
+ * or tampering with that hook in a GitGuard repository (exit code 2 blocks the tool call).
  */
 
-import * as path from 'node:path';
 import process from 'node:process';
-import { findGitCommits } from './enforcement/commit-command.js';
-import { evaluateCommitGate } from './enforcement/commit-gate.js';
+import { findHookBypass, isGitGuardRepository } from './enforcement/bypass-guard.js';
 
-/** Shell tools whose commands can run `git commit` (Codex reports its shell as Bash). */
+/** Shell tools that can run git (Codex reports its shell as Bash). */
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 
 interface PreToolUseEvent {
@@ -38,24 +35,12 @@ async function main(): Promise<number> {
   if (!SHELL_TOOLS.has(event.tool_name ?? '') || typeof event.tool_input?.command !== 'string') {
     return 0;
   }
-
-  const baseDir = event.cwd || process.cwd();
-  for (const commit of findGitCommits(event.tool_input.command)) {
-    const repoDir = commit.dir ? path.resolve(baseDir, commit.dir) : baseDir;
-    try {
-      // Staging commands earlier in the same command line have not run yet, so require every change to be checked.
-      const coverage = commit.stagesFirst ? 'all' : commit.all ? 'tracked' : 'staged';
-      const decision = await evaluateCommitGate(repoDir, { coverage });
-      if (!decision.allow) {
-        process.stderr.write(`${decision.reason}\n`);
-        return 2;
-      }
-    } catch (err) {
-      // Not a repository or git unavailable: do not get in the way of unrelated commands.
-      process.stderr.write(`[gitguard-hook] skipped: ${err instanceof Error ? err.message : String(err)}\n`);
-    }
+  const reason = findHookBypass(event.tool_input.command);
+  if (!reason || !isGitGuardRepository(event.cwd || process.cwd())) {
+    return 0;
   }
-  return 0;
+  process.stderr.write(`GitGuard: blocked because ${reason}. Run the GitGuard check tool and commit normally; only the user may skip the check.\n`);
+  return 2;
 }
 
 main().then((code) => process.exit(code), () => process.exit(0));

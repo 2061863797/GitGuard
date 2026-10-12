@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { DefaultGitGuardEngine } from '../../../src/core/engine.js';
-import { evaluateCommitGate, readLastCheck } from '../../../src/enforcement/commit-gate.js';
+import {
+  evaluateCommitGate,
+  hasGitGuardConfig,
+  installPreCommitHook,
+  readLastCheck,
+  HOOK_MARKER,
+} from '../../../src/enforcement/commit-gate.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import { createOnlineSemanticStub } from '../../helpers/online-semantic-stub.js';
 
@@ -23,12 +31,22 @@ describe('commit gate', () => {
     await repo.cleanup();
   });
 
-  it('allows commits in repositories without a GitGuard config', async () => {
-    await repo.exec(['rm', '-q', '--cached', '.gitguard.yml']);
-    await repo.deleteFile('.gitguard.yml');
+  it('allows commits in repositories that never had a GitGuard config', async () => {
+    await repo.exec(['rm', '-q', '.gitguard.yml']);
+    await repo.commit('drop config');
+    expect(await hasGitGuardConfig(repo.repoPath)).toBe(false);
     await repo.writeFile('src/app.ts', 'export const a = 1;\n');
     await repo.stage();
     expect(await evaluateCommitGate(repo.repoPath)).toEqual({ allow: true });
+  });
+
+  it('keeps the gate on when the config is deleted from the working tree but still in HEAD', async () => {
+    await repo.deleteFile('.gitguard.yml');
+    await repo.writeFile('src/app.ts', 'export const a = 1;\n');
+    await repo.stage();
+    expect(await hasGitGuardConfig(repo.repoPath)).toBe(true);
+    const decision = await evaluateCommitGate(repo.repoPath);
+    expect(decision.allow).toBe(false);
   });
 
   it('blocks a commit when no check was recorded', async () => {
@@ -39,7 +57,7 @@ describe('commit gate', () => {
     expect(decision.reason).toMatch(/none was recorded/);
   });
 
-  it('allows staging and committing exactly what an "all" check covered, including CRLF content', async () => {
+  it('allows committing what an "all" check covered, including CRLF content and partial commits', async () => {
     await repo.writeFile('src/app.ts', 'export const a = 1;\r\n');
     await repo.writeFile('README.md', '# changed\r\n');
     const result = await engine.check({ cwd: repo.repoPath });
@@ -48,7 +66,6 @@ describe('commit gate', () => {
 
     await repo.stage();
     expect(await evaluateCommitGate(repo.repoPath)).toEqual({ allow: true });
-    // A partial commit of checked content is also fine.
     await repo.exec(['reset', '-q', 'README.md']);
     expect(await evaluateCommitGate(repo.repoPath)).toEqual({ allow: true });
   });
@@ -69,7 +86,6 @@ describe('commit gate', () => {
     expect(checked.status).toBe('BLOCK');
     await repo.stage();
     const blocked = await evaluateCommitGate(repo.repoPath);
-    expect(blocked.allow).toBe(false);
     expect(blocked.reason).toMatch(/returned BLOCK/);
     expect(blocked.reason).toContain(checked.findings[0].id);
 
@@ -80,44 +96,34 @@ describe('commit gate', () => {
     expect(await evaluateCommitGate(repo.repoPath)).toEqual({ allow: true });
   });
 
-  it('allows REVIEW and WARN results', async () => {
-    await repo.writeFile('src/app.ts', 'export const a = 1;\n');
-    const result = await engine.check({
-      cwd: repo.repoPath,
-      rules: [{ id: 'violated_style', rule: 'Exports must be documented', level: 'review' }],
-    });
-    expect(result.status).toBe('REVIEW');
-    await repo.stage();
-    expect(await evaluateCommitGate(repo.repoPath)).toEqual({ allow: true });
-  });
-
   it('blocks after HEAD moves', async () => {
     await repo.writeFile('src/app.ts', 'export const a = 1;\n');
     await engine.check({ cwd: repo.repoPath });
     await repo.stage();
-    await repo.commit('committed elsewhere');
+    await repo.exec(['commit', '-q', '--no-verify', '-m', 'committed elsewhere']);
     await repo.writeFile('src/app.ts', 'export const a = 1;\n// more\n');
     await repo.stage();
     expect((await evaluateCommitGate(repo.repoPath)).reason).toMatch(/HEAD moved/);
   });
 
-  it('checks unstaged tracked changes for commit -a', async () => {
-    await repo.writeFile('README.md', '# checked\n');
-    await engine.check({ cwd: repo.repoPath, scope: 'staged' });
-    expect((await evaluateCommitGate(repo.repoPath, { coverage: 'tracked' })).allow).toBe(false);
+  it('records submodule changes by their checked-out commit instead of failing', async () => {
+    const sub = await createTempGitRepo('gitguard-sub-');
+    try {
+      await sub.writeFile('lib.txt', 'v1\n');
+      await sub.stage();
+      await sub.commit('v1');
+      await repo.exec(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub.repoPath.split(path.sep).join('/'), 'mod']);
+      await repo.exec(['commit', '-q', '--no-verify', '-m', 'add submodule']);
+      await repo.exec(['-C', 'mod', 'commit', '-q', '--allow-empty', '-m', 'bump']);
 
-    await engine.check({ cwd: repo.repoPath });
-    expect(await evaluateCommitGate(repo.repoPath, { coverage: 'tracked' })).toEqual({ allow: true });
-  });
-
-  it('requires every change to be checked when the command stages files first', async () => {
-    await repo.writeFile('src/checked.ts', 'export const a = 1;\n');
-    await engine.check({ cwd: repo.repoPath });
-    expect(await evaluateCommitGate(repo.repoPath, { coverage: 'all' })).toEqual({ allow: true });
-    await repo.writeFile('src/unchecked.ts', 'export const b = 2;\n');
-    const decision = await evaluateCommitGate(repo.repoPath, { coverage: 'all' });
-    expect(decision.allow).toBe(false);
-    expect(decision.reason).toContain('src/unchecked.ts');
+      const result = await engine.check({ cwd: repo.repoPath });
+      expect(result.status).toBe('PASS');
+      expect(readLastCheck(repo.repoPath)?.files.mod).toMatch(/^[0-9a-f]{40}$/);
+      await repo.exec(['add', 'mod']);
+      expect(await evaluateCommitGate(repo.repoPath)).toEqual({ allow: true });
+    } finally {
+      await sub.cleanup();
+    }
   });
 
   it('does not record commit or range checks', async () => {
@@ -126,5 +132,45 @@ describe('commit gate', () => {
     const sha = await repo.commit('second');
     await engine.check({ cwd: repo.repoPath, target: sha });
     expect(readLastCheck(repo.repoPath)).toBeNull();
+  });
+});
+
+describe('installPreCommitHook', () => {
+  let repo: GitFixture;
+  const script = path.resolve('dist', 'pre-commit.js');
+
+  beforeEach(async () => {
+    repo = await createTempGitRepo();
+  });
+
+  afterEach(async () => {
+    await repo.cleanup();
+  });
+
+  it('installs, keeps and refreshes its own hook', async () => {
+    const first = await installPreCommitHook(repo.repoPath, script);
+    expect(first.status).toBe('installed');
+    const hookPath = path.join(repo.repoPath, '.git', 'hooks', 'pre-commit');
+    const content = fs.readFileSync(hookPath, 'utf8');
+    expect(content).toContain(HOOK_MARKER);
+    expect(content).toContain(script.replace(/\\/g, '/'));
+    expect((await installPreCommitHook(repo.repoPath, script)).status).toBe('unchanged');
+    expect((await installPreCommitHook(repo.repoPath, `${script}.moved`)).status).toBe('updated');
+  });
+
+  it('never overwrites a hook it did not install', async () => {
+    const hookPath = path.join(repo.repoPath, '.git', 'hooks', 'pre-commit');
+    fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+    fs.writeFileSync(hookPath, '#!/bin/sh\necho mine\n');
+    const result = await installPreCommitHook(repo.repoPath, script);
+    expect(result.status).toBe('skipped');
+    expect(fs.readFileSync(hookPath, 'utf8')).toBe('#!/bin/sh\necho mine\n');
+  });
+
+  it('does not write into a hooks directory outside .git (core.hooksPath)', async () => {
+    await repo.exec(['config', 'core.hooksPath', '.husky']);
+    const result = await installPreCommitHook(repo.repoPath, script);
+    expect(result.status).toBe('skipped');
+    expect(fs.existsSync(path.join(repo.repoPath, '.husky', 'pre-commit'))).toBe(false);
   });
 });

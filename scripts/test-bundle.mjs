@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Smoke test for the committed plugin bundles: start the MCP server over stdio from the plugin's
- * server directory (as Codex does), list tools, run a rule-free check on a temp repo, and run the
- * commit hook through the exact command in hooks/hooks.json.
+ * server directory (as Codex does), list tools, run a rule-free check on a temp repo, confirm the
+ * check installs a working Git pre-commit hook, and run the PreToolUse guard from hooks/hooks.json.
  */
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
@@ -53,22 +53,30 @@ try {
   assert.equal(result.structuredContent.status, 'PASS');
   assert.equal(result.structuredContent.diffSummary.filesChanged, 1);
 
-  // Commit hook, launched exactly as the plugins do; a .gitguard.yml opts the repository in.
+  // Opting in with a .gitguard.yml makes the next check install the Git pre-commit hook from the bundle.
+  await fs.writeFile(path.join(tempDir, '.gitguard.yml'), 'version: 1\n');
+  const optedIn = await client.callTool({ name: 'check', arguments: { cwd: tempDir } });
+  assert.match(String(optedIn.structuredContent.metadata.commitHook), /^installed/, JSON.stringify(optedIn.structuredContent.metadata));
+  await fs.writeFile(path.join(tempDir, 'unchecked.js'), 'export const later = 2;\n');
+  git(['add', '-A']);
+  const commit = spawnSync('git', ['commit', '-m', 'x'], { cwd: tempDir, encoding: 'utf8', windowsHide: true });
+  assert.notEqual(commit.status, 0, 'the pre-commit hook must reject unchecked content');
+  assert.match(`${commit.stdout}${commit.stderr}`, /unchecked\.js/);
+
+  // PreToolUse guard, launched exactly as the plugins do.
   const hooks = JSON.parse(await fs.readFile(path.join(repoRoot, 'plugins', 'gitguard', 'hooks', 'hooks.json'), 'utf8'));
   const hookCommand = hooks.hooks.PreToolUse[0].hooks[0].command;
-  const runHook = (command) => spawnSync(hookCommand, {
+  const runGuard = (command) => spawnSync(hookCommand, {
     shell: true,
     input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: tempDir }),
     env: { ...env, PLUGIN_ROOT: path.join(repoRoot, 'plugins', 'gitguard') },
     encoding: 'utf8',
     windowsHide: true,
   });
-  await fs.writeFile(path.join(tempDir, '.gitguard.yml'), 'version: 1\n');
-  await fs.writeFile(path.join(tempDir, 'unchecked.js'), 'export const later = 2;\n');
-  assert.equal(runHook('git status').status, 0);
-  const blocked = runHook('git add -A && git commit -m x');
-  assert.equal(blocked.status, 2, blocked.stderr);
-  assert.match(blocked.stderr, /GitGuard/);
+  assert.equal(runGuard('git commit -m x').status, 0);
+  const guarded = runGuard('git commit --no-verify -m x');
+  assert.equal(guarded.status, 2, guarded.stderr);
+  assert.match(guarded.stderr, /GitGuard/);
 
   process.stdout.write(`Bundle smoke test passed (GitGuard ${packageJson.version}).\n`);
 } finally {

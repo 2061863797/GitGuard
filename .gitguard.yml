@@ -12,7 +12,7 @@ deterministic:
 
 rules:
   - id: bundle_up_to_date
-    rule: "修改 src/ 下的代码时，必须同时更新打包产物 plugins/gitguard/server/ 下的 gitguard-mcp.mjs 和 gitguard-hook.mjs"
+    rule: "修改 src/ 下的代码时，必须同时运行 pnpm bundle，更新 plugins/gitguard/server/ 下的打包文件"
     level: review
     files: ["src/**", "plugins/gitguard/server/**"]
   - id: versions_in_sync

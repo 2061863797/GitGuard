@@ -147,6 +147,8 @@ export interface VerificationReportMetadata {
   headSha: string;
   /** Number of rules sent to System One (0 when skipped) */
   rulesChecked?: number;
+  /** Pre-commit hook installation outcome in GitGuard repositories */
+  commitHook?: string;
   /**
    * Whether finding persistence to the repository store succeeded.
    * `false` means findings were computed but NOT saved: a later `verify()`

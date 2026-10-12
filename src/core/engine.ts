@@ -42,7 +42,8 @@ import {
   SecurityViolationError,
   InvalidGitRefError,
 } from '../types/errors.js';
-import { recordLastCheck } from '../enforcement/commit-gate.js';
+import { hasGitGuardConfig, installPreCommitHook, recordLastCheck, type GitExec } from '../enforcement/commit-gate.js';
+import { COMMAND_CHECK_IDS, commandCacheKey, readCommandCache, writeCommandCache } from './command-cache.js';
 import { scanContentForSecrets, SECRET_PATTERNS, validateCustomSecretPattern, type SecretPattern } from '../analysis/deterministic/secrets.js';
 
 function normalizeRepositoryRoot(root: string): string {
@@ -66,11 +67,16 @@ export interface GitGuardEngineDependencies {
   typesafeProvider?: DecisionProvider;
   policyEngine?: PolicyEngine;
   findingManager?: FindingManager;
+  /** Absolute path of the pre-commit script to install into GitGuard repositories (omit to skip installing) */
+  preCommitScript?: string;
 }
+
+const LEVEL_RANK = { warn: 1, review: 2, block: 3 } as const;
 
 /**
  * Validates agent rules and combines them with config rules.
- * Previously checked agent rules (verify) are appended when their id is not taken.
+ * Stored agent rules (still-active findings, or verify targets) are appended when their id is free;
+ * an agent may repeat such a rule but not reword it or lower its level.
  */
 export function mergeRules(
   configRules: RuleSpec[] = [],
@@ -94,9 +100,16 @@ export function mergeRules(
     merged.push({ ...rule, source: 'agent' });
   });
   for (const rule of storedRules) {
-    if (rule.source === 'agent' && !ids.has(rule.id)) {
+    if (rule.source !== 'agent') continue;
+    const repeated = merged.find((existing) => existing.id === rule.id);
+    if (!repeated) {
       ids.add(rule.id);
       merged.push(rule);
+    } else if (repeated.source === 'agent' &&
+        (repeated.rule !== rule.rule || LEVEL_RANK[repeated.level] < LEVEL_RANK[rule.level])) {
+      throw new ConfigurationError(
+        `Rule '${rule.id}' is still violated from an earlier check; keep its wording and level, fix the code, then run verify.`
+      );
     }
   }
   return merged;
@@ -199,14 +212,41 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
   public readonly typesafeProvider: DecisionProvider;
   public readonly policyEngine: PolicyEngine;
   public readonly findingManager: FindingManager;
+  private readonly preCommitScript?: string;
 
   constructor(deps?: GitGuardEngineDependencies) {
+    this.preCommitScript = deps?.preCommitScript;
     this.gitAdapter = deps?.gitAdapter ?? new GitCLIAdapter();
     this.contextBuilder = deps?.contextBuilder ?? new DefaultContextBuilder(this.gitAdapter);
     this.deterministicRunner = deps?.deterministicRunner ?? new DeterministicRunner();
     this.typesafeProvider = deps?.typesafeProvider ?? new TypeSafeSystemOneProvider();
     this.findingManager = deps?.findingManager ?? new DefaultFindingManager();
     this.policyEngine = deps?.policyEngine ?? new DefaultPolicyEngine(this.findingManager);
+  }
+
+  /** Read-only git runner for the commit gate and command cache; unavailable with an injected adapter. */
+  private gitExec(): GitExec | undefined {
+    if (!(this.gitAdapter instanceof GitCLIAdapter)) return undefined;
+    const adapter = this.gitAdapter;
+    return async (args, dir) => (await adapter.executeGit(args, dir)).stdout;
+  }
+
+  /**
+   * Agent rules whose findings are still active at the current HEAD. A later check keeps asking them,
+   * so dropping a violated rule from the next check cannot turn a BLOCK into a PASS.
+   */
+  private async pendingAgentRules(root: string, headSha: string): Promise<RuleSpec[]> {
+    let stored: Finding[] = [];
+    try {
+      stored = await new FileFindingStore(root).list({ lifecycle: 'active' });
+    } catch {
+      return [];
+    }
+    return stored
+      .filter((finding) => finding.provenance?.detectedHeadSha === headSha &&
+        (!finding.provenance?.repositoryRoot || normalizeRepositoryRoot(finding.provenance.repositoryRoot) === normalizeRepositoryRoot(root)))
+      .map((finding) => finding.metadata?.rule as RuleSpec | undefined)
+      .filter((rule): rule is RuleSpec => Boolean(rule && rule.source === 'agent' && rule.id && rule.rule));
   }
 
   private async resolveConfig(cwd: string, optionsConfig?: PolicyConfig, configPath?: string): Promise<PolicyConfig> {
@@ -259,7 +299,8 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     }
 
     const config = await this.resolveConfig(cwd, options.config, options.configPath);
-    const rules = mergeRules(config.rules, options.rules, storedRules);
+    // Validate agent rules before running any command; the final list also includes pending rules.
+    mergeRules(config.rules, options.rules, storedRules);
     const scope = options.scope ?? (options.target ? (options.target.includes('..') ? 'range' : 'commit') : 'all');
     const diffOpts = buildDiffOptions(options.target, cwd);
     const taskStr = typeof options.task === 'string' ? options.task : options.task?.task;
@@ -293,6 +334,10 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         };
 
     const context = semanticContext;
+    const repoRoot = context.repository?.rootPath ?? (await this.gitAdapter.getRepositoryRoot(cwd).catch(() => cwd));
+    const exec = this.gitExec();
+    const pending = await this.pendingAgentRules(repoRoot, context.repository?.headSha ?? '');
+    const rules = mergeRules(config.rules, options.rules, [...storedRules, ...pending]);
     const changedPaths = (context.diff?.files || []).map((f) => f.newPath || f.oldPath || '');
     const isCleanChangeset =
       changedPaths.length === 0 && (!context.diff?.raw || context.diff.raw.trim().length === 0);
@@ -321,10 +366,41 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         }
       }
     } else {
-      deterministicResults = await this.deterministicRunner.run(
-        rawContext,
-        toDeterministicRunnerConfig(config.deterministic)
-      );
+      // Reuse passing project-command results while nothing they depend on changed.
+      let cacheKey: string | undefined;
+      let cached: DeterministicResult[] | null = null;
+      if (exec) {
+        try {
+          cacheKey = await commandCacheKey(repoRoot, config.deterministic, exec);
+          cached = readCommandCache(repoRoot, cacheKey);
+        } catch {
+          cacheKey = undefined;
+        }
+      }
+      if (cached) {
+        const secretOnly = toDeterministicRunnerConfig({
+          ...config.deterministic,
+          test: { enabled: false }, lint: { enabled: false }, typecheck: { enabled: false },
+        });
+        const fresh = (await this.deterministicRunner.run(rawContext, secretOnly))
+          .filter((r) => !(COMMAND_CHECK_IDS as readonly string[]).includes(r.id));
+        deterministicResults = [
+          ...fresh,
+          ...cached.map((r) => ({ ...r, durationMs: 0, summary: `${r.summary ?? `${r.id} passed`} (cached: no changes since it last passed)` })),
+        ];
+      } else {
+        deterministicResults = await this.deterministicRunner.run(
+          rawContext,
+          toDeterministicRunnerConfig(config.deterministic)
+        );
+        if (cacheKey) {
+          try {
+            writeCommandCache(repoRoot, cacheKey, deterministicResults);
+          } catch {
+            // caching is an optimisation only
+          }
+        }
+      }
     }
 
     // 3. Check only the rules whose file filters match this changeset; no rules means no API call
@@ -381,7 +457,6 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
 
     if (checkResult.findings.length > 0) {
       try {
-        const repoRoot = context.repository?.rootPath ?? (await this.gitAdapter.getRepositoryRoot(cwd).catch(() => cwd));
         const store = new FileFindingStore(repoRoot);
         await store.save(checkResult.findings);
         checkResult.metadata.persistenceOk = true;
@@ -395,16 +470,24 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       }
     }
 
-    // Record what this check covered so the commit hook can verify the content being committed.
-    if (this.gitAdapter instanceof GitCLIAdapter) {
-      const adapter = this.gitAdapter;
+    // Record what this check covered so the pre-commit hook can verify the content being committed,
+    // and make sure the hook is installed in repositories that opted into GitGuard.
+    if (exec) {
       try {
-        const root = context.repository?.rootPath ?? (await adapter.getRepositoryRoot(cwd));
         const blocking = checkResult.findings.filter((f) => f.status === 'block').map((f) => f.id);
-        await recordLastCheck(root, scope, checkResult.status, blocking,
-          async (args, dir) => (await adapter.executeGit(args, dir)).stdout);
+        await recordLastCheck(repoRoot, scope, checkResult.status, blocking, exec);
       } catch (err) {
         console.error(`[gitguard] WARNING: failed to record the check for the commit gate: ${(err as Error)?.message ?? err}`);
+      }
+      if (this.preCommitScript) {
+        try {
+          if (await hasGitGuardConfig(repoRoot, exec)) {
+            const hook = await installPreCommitHook(repoRoot, this.preCommitScript, exec);
+            checkResult.metadata.commitHook = hook.status === 'skipped' ? `not installed: ${hook.reason}` : `${hook.status} (${hook.path})`;
+          }
+        } catch (err) {
+          checkResult.metadata.commitHook = `not installed: ${(err as Error)?.message ?? err}`;
+        }
       }
     }
 

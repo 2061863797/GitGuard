@@ -81,22 +81,22 @@ GitGuard 是一个 MCP 服务，提供两个工具：
 
 ## 提交被拦截时
 
-如果仓库里有 `.gitguard.yml`，插件会在 agent 执行 `git commit` 前检查最近一次 GitGuard 检查。出现下面任一情况，提交会被拦截：
+仓库里有 `.gitguard.yml` 时，`check` 会往仓库装一个 Git 的 pre-commit 钩子（结果里的 `metadata.commitHook` 会说明是否装上）。之后每次 `git commit`，不管怎么写，钩子都会核对最近一次检查。出现下面任一情况，提交会被拒绝：
 - 没有检查记录；
 - 要提交的内容和检查时不一致（检查之后又改过文件，或者提交了没检查过的文件）；
 - 检查之后 HEAD 变了；
 - 最近一次结论是 `BLOCK`。
 
-被拦截时：
-- 按拦截提示重新调用 `check`（`scope` 为 `all` 或 `staged`）；
+被拒绝时：
+- 按提示重新调用 `check`（`scope` 为 `all` 或 `staged`）；
 - 如果是 `BLOCK`，先修复，再用 finding ID 调用 `verify`；
 - 通过后再提交。
 
-注意，同一条命令里先 `git add` 再 `git commit` 时，所有未提交的改动都必须已经被检查过。
+你在本次任务里写过的规则，只要对应的 finding 还没解决，后面的 `check` 会自动继续判断它们。不能靠下次不传、换个说法或降低 `level` 来过关。
 
 ## 禁止事项
 
 - 不能为了通过检查而删规则、放宽规则、降低 `level`。
 - 不能修改 `.gitguard.yml`，例如删掉规则或关掉检查命令，除非用户明确要求。
 - 不能在 `BLOCK` 未解决时提交，也不能跳过检查直接提交。
-- 不能绕过提交拦截，例如改用其他方式写入提交、修改钩子配置或删除 `.git/gitguard/` 下的记录。
+- 不能跳过或破坏提交拦截：不用 `--no-verify` / `-n`，不改 `core.hooksPath`，不动 `.git/hooks/` 和 `.git/gitguard/`。插件会拦下这些命令；只有用户本人可以跳过检查。

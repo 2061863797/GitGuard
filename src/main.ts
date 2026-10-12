@@ -3,7 +3,11 @@
  * Stdio entrypoint for the GitGuard MCP server (bundled into the plugins).
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+import { DefaultGitGuardEngine } from './core/engine.js';
 import { GitGuardMcpServer, logDiagnostic } from './interfaces/mcp/server.js';
 import { GITGUARD_VERSION } from './version.js';
 
@@ -12,7 +16,17 @@ if (process.argv.includes('--version')) {
   process.exit(0);
 }
 
-const server = new GitGuardMcpServer({ debug: process.argv.includes('--debug') });
+// The pre-commit script ships next to this file: gitguard-pre-commit.mjs in the plugin bundle,
+// pre-commit.js in a tsc build.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const preCommitScript = ['gitguard-pre-commit.mjs', 'pre-commit.js']
+  .map((name) => path.join(here, name))
+  .find((candidate) => fs.existsSync(candidate));
+
+const server = new GitGuardMcpServer({
+  engine: new DefaultGitGuardEngine({ preCommitScript }),
+  debug: process.argv.includes('--debug'),
+});
 
 const shutdown = async () => {
   logDiagnostic('Shutdown signal received, terminating MCP server...');

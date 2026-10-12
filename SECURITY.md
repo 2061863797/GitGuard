@@ -31,11 +31,15 @@ Surrounding code and optional full-file context use the diff's new-side snapshot
 
 Configured test, lint and typecheck commands run in the repository with timeouts and without shell interpolation. Those commands can run repository scripts and write files. They are not an operating-system sandbox. Read their configuration and scripts before checking an unfamiliar repository.
 
-GitGuard writes finding records and the last-check record used by the commit gate under `.git/gitguard/`. Without a `.gitguard.yml`, only the secret scan runs; test, lint and typecheck commands run only when the repository configures them.
+GitGuard writes finding records, the last-check record and the command cache under `.git/gitguard/`, and installs `.git/hooks/pre-commit` in repositories that opted in. Without a `.gitguard.yml`, only the secret scan runs; test, lint and typecheck commands run only when the repository configures them.
 
 ### Commit gate
 
-In repositories with a GitGuard config file, the plugin's PreToolUse hook blocks an agent's `git commit` run through the Bash or PowerShell tool unless the last check covered the exact blob ids being committed, HEAD is unchanged and the last verdict was not `BLOCK`. It is a guard against forgetting the check, not a security boundary: it does not apply to commits made outside the agent's shell tool, it lets commands through when Git is unavailable, and an agent with write access could edit hook configuration or the record. The hook only reads repository state; it runs `git rev-parse`, `git diff`, `git ls-files` and `git hash-object` without `-w`.
+In repositories with a GitGuard config file (in the working tree or in HEAD), `check` installs `.git/hooks/pre-commit`. Git runs it for every commit form, with the index that will actually be committed; it rejects the commit unless the last check covered those exact blob ids, HEAD is unchanged and the last verdict was not `BLOCK`. It never overwrites a pre-commit hook it did not install and does not write into a `core.hooksPath` outside the Git directory. Hook errors reject the commit; `git commit --no-verify` skips it, and merges, cherry-picks and reverts do not run it.
+
+The plugin's PreToolUse hook blocks agent shell commands that skip or tamper with the hook (`--no-verify`, `commit -n`, `core.hooksPath`, `.git/hooks`, `.git/gitguard`). This is a guard against forgetting the check, not a security boundary: a process that can run arbitrary commands can still bypass it. Agent rules whose findings are still active at the current HEAD are re-checked by later checks and cannot be reworded or downgraded until resolved.
+
+Passing test/lint/typecheck results are cached under `.git/gitguard/` keyed by HEAD, the content of every uncommitted file and the commands; ignored files are not part of the key.
 
 ### Provider and configuration authority
 

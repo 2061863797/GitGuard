@@ -62,15 +62,8 @@ export const DEFAULT_POLICY_CONFIG: PolicyConfig = {
  */
 export const DEFAULT_CONFIG = DEFAULT_POLICY_CONFIG;
 
-/**
- * Standard configuration file names searched in repository roots.
- */
-export const CONFIG_FILE_NAMES = [
-  '.gitguard.yml',
-  '.gitguard.yaml',
-  'gitguard.yml',
-  'gitguard.yaml',
-];
+export { CONFIG_FILE_NAMES } from './config-files.js';
+import { CONFIG_FILE_NAMES } from './config-files.js';
 
 /**
  * Keys rejected anywhere in the file: `yaml` preserves `__proto__` as an own key,

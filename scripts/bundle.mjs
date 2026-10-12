@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Bundles the MCP server and the commit hook into dependency-free ESM files shipped inside the plugins.
+ * Bundles the MCP server, the PreToolUse guard and the Git pre-commit gate into dependency-free ESM files.
  * Plugin installs copy files without running a package manager, so the bundle is committed.
  */
 import * as path from 'node:path';
@@ -12,6 +12,7 @@ const serverDir = path.join(repoRoot, 'plugins', 'gitguard', 'server');
 const entries = [
   ['main.ts', 'gitguard-mcp.mjs'],
   ['hook.ts', 'gitguard-hook.mjs'],
+  ['pre-commit.ts', 'gitguard-pre-commit.mjs'],
 ];
 
 for (const [entry, output] of entries) {

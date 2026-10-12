@@ -26,7 +26,9 @@ export const GITGUARD_SERVER_INSTRUCTIONS = [
   'review (the user must decide) or block (must not be committed). Rules require TYPESAFE_API_KEY; without rules no key is needed.',
   'Rules must be concrete enough to judge from the diff ("Functions must not exceed 50 lines", not "Write clean code").',
   'BLOCK: fix the cause and verify. REVIEW: report to the user. WARN: mention it.',
-  'In repositories with a .gitguard.yml, an agent git commit is blocked unless the last check covered exactly the content being committed and was not BLOCK.',
+  'In repositories with a .gitguard.yml, check installs a Git pre-commit hook: a commit is rejected unless the last check covered exactly the content being committed and was not BLOCK.',
+  'Rules you used stay in force while their findings are active: a later check re-checks them, and they cannot be reworded or downgraded.',
+  'Never skip the hook (--no-verify, -n, core.hooksPath) or edit .git/hooks or .git/gitguard; only the user may skip it.',
   'Before opening a pull request, also run check with target "<base>...HEAD" to review the whole branch.',
   'Never delete or weaken rules, lower a level, or edit .gitguard.yml to make a check pass, and never commit past a BLOCK.',
 ].join(' ');

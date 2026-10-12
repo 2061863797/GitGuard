@@ -30,7 +30,7 @@ secret_scan:                # 可选：在内置规则之外再扫描的密钥�
 
 只接受这几个字段，写了其他字段（包括拼错的字段）会报错。
 
-**注意**：这个文件一旦存在，仓库就开启了**提交拦截**。agent 提交前必须先通过 GitGuard 检查，没检查过或者结论是 BLOCK 都会被拦下。
+**注意**：这个文件一旦存在，仓库就开启了**提交拦截**。下一次 `check` 会在 `.git/hooks/pre-commit` 装上 GitGuard 的钩子，之后**所有人**的提交都要先通过检查：没检查过、检查后又改过、或者结论是 BLOCK，都会被拒绝。人可以用 `git commit --no-verify` 跳过一次。如果仓库已经有别的 pre-commit 钩子，或者用了 husky 这类设置了 `core.hooksPath` 的工具，GitGuard 不会覆盖，会在 `metadata.commitHook` 里说明，需要用户手动把钩子接上。
 
 ## 步骤
 
@@ -87,7 +87,7 @@ secret_scan:                # 可选：在内置规则之外再扫描的密钥�
 把完整的文件内容展示给用户，并说明三点：
 - `deterministic` 里的命令会在每次检查时在本机执行；
 - 有 `rules` 时需要设置环境变量 `TYPESAFE_API_KEY`；
-- 文件写入后，这个仓库就开启了提交拦截。
+- 文件写入后，这个仓库就开启了提交拦截，人提交也会被检查，可以用 `git commit --no-verify` 跳过一次。
 
 用户确认后再写入 `.gitguard.yml`。
 

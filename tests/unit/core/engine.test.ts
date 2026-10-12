@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { DefaultGitGuardEngine, mergeRules, MAX_AGENT_RULES } from '../../../src/core/engine.js';
 import { parseConfig } from '../../../src/policy/config.js';
 import { ConfigurationError, ProviderError } from '../../../src/types/errors.js';
@@ -178,6 +181,143 @@ describe('DefaultGitGuardEngine check and verify', () => {
       cwd: repository.path,
       rules: [{ id: 'r1', rule: 'Nothing may be wrong', level: 'warn' }],
     })).rejects.toBeInstanceOf(ProviderError);
+  });
+});
+
+describe('agent rules that are still violated', () => {
+  let repository: GitFixture;
+  let violated: Set<string>;
+  let engine: DefaultGitGuardEngine;
+
+  beforeEach(async () => {
+    repository = await createTempGitRepo();
+    await repository.writeFile('README.md', '# fixture\n');
+    await repository.stage();
+    await repository.commit('initial');
+    violated = new Set();
+    const stub = createOnlineSemanticStub();
+    engine = new DefaultGitGuardEngine({
+      typesafeProvider: {
+        name: 'typesafe',
+        isAvailable: stub.isAvailable,
+        async evaluate(context, questions) {
+          const decisions = await stub.evaluate(context, questions);
+          return decisions.map((d) => ({ ...d, probability: violated.has(d.id) ? 0.9 : 0.1 }));
+        },
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await repository.cleanup();
+  });
+
+  it('are re-checked when the next check leaves them out, so the BLOCK stays', async () => {
+    await repository.writeFile('src/app.ts', 'console.log("debug");\n');
+    violated.add('no_debug');
+    const first = await engine.check({
+      cwd: repository.path,
+      rules: [{ id: 'no_debug', rule: 'Code must not print debug output', level: 'block' }],
+    });
+    expect(first.status).toBe('BLOCK');
+
+    const again = await engine.check({ cwd: repository.path });
+    expect(again.status).toBe('BLOCK');
+    expect(again.metadata.rulesChecked).toBe(1);
+
+    violated.clear();
+    await repository.writeFile('src/app.ts', 'export const value = 1;\n');
+    expect((await engine.check({ cwd: repository.path })).status).toBe('PASS');
+  });
+
+  it('cannot be reworded or downgraded by the agent while still active', async () => {
+    await repository.writeFile('src/app.ts', 'console.log("debug");\n');
+    violated.add('no_debug');
+    await engine.check({
+      cwd: repository.path,
+      rules: [{ id: 'no_debug', rule: 'Code must not print debug output', level: 'block' }],
+    });
+    await expect(engine.check({
+      cwd: repository.path,
+      rules: [{ id: 'no_debug', rule: 'Anything goes', level: 'block' }],
+    })).rejects.toThrow(/still violated/);
+    await expect(engine.check({
+      cwd: repository.path,
+      rules: [{ id: 'no_debug', rule: 'Code must not print debug output', level: 'warn' }],
+    })).rejects.toThrow(/still violated/);
+  });
+
+  it('stop being re-checked once HEAD moves', async () => {
+    await repository.writeFile('src/app.ts', 'console.log("debug");\n');
+    violated.add('no_debug');
+    await engine.check({
+      cwd: repository.path,
+      rules: [{ id: 'no_debug', rule: 'Code must not print debug output', level: 'block' }],
+    });
+    await repository.stage();
+    await repository.exec(['commit', '-q', '--no-verify', '-m', 'committed by a person']);
+    await repository.writeFile('src/other.ts', 'export const other = 1;\n');
+    const next = await engine.check({ cwd: repository.path });
+    expect(next.metadata.rulesChecked).toBe(0);
+  });
+});
+
+describe('project command cache', () => {
+  let repository: GitFixture;
+  let counterDir: string;
+
+  beforeEach(async () => {
+    repository = await createTempGitRepo();
+    await repository.writeFile('README.md', '# fixture\n');
+    await repository.stage();
+    await repository.commit('initial');
+    counterDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitguard-counter-'));
+  });
+
+  afterEach(async () => {
+    await repository.cleanup();
+    fs.rmSync(counterDir, { recursive: true, force: true });
+  });
+
+  function counterConfig(exitCode = 0) {
+    const script = path.join(counterDir, 'count.cjs');
+    fs.writeFileSync(script, `const fs = require('fs'); fs.appendFileSync(${JSON.stringify(path.join(counterDir, 'runs.txt'))}, 'x'); process.exit(${exitCode});\n`);
+    return parseConfig(`deterministic:\n  test: "node ${script.split(path.sep).join('/')}"\n`);
+  }
+  const runs = () => (fs.existsSync(path.join(counterDir, 'runs.txt')) ? fs.readFileSync(path.join(counterDir, 'runs.txt'), 'utf8').length : 0);
+
+  it('reuses a passing result until the content changes', async () => {
+    const engine = new DefaultGitGuardEngine({ typesafeProvider: createOnlineSemanticStub() });
+    const config = counterConfig(0);
+    await repository.writeFile('src/app.ts', 'export const a = 1;\n');
+
+    const first = await engine.check({ cwd: repository.path, config });
+    expect(first.deterministicResults.find((r) => r.id === 'test')?.status).toBe('passed');
+    const second = await engine.check({ cwd: repository.path, config });
+    expect(second.deterministicResults.find((r) => r.id === 'test')?.summary).toMatch(/cached/);
+    expect(runs()).toBe(1);
+
+    await repository.writeFile('src/app.ts', 'export const a = 2;\n');
+    await engine.check({ cwd: repository.path, config });
+    expect(runs()).toBe(2);
+  });
+
+  it('never caches a failing result', async () => {
+    const engine = new DefaultGitGuardEngine({ typesafeProvider: createOnlineSemanticStub() });
+    const config = counterConfig(1);
+    await repository.writeFile('src/app.ts', 'export const a = 1;\n');
+    expect((await engine.check({ cwd: repository.path, config })).status).toBe('BLOCK');
+    expect((await engine.check({ cwd: repository.path, config })).status).toBe('BLOCK');
+    expect(runs()).toBe(2);
+  });
+
+  it('still scans for secrets when command results come from the cache', async () => {
+    const engine = new DefaultGitGuardEngine({ typesafeProvider: createOnlineSemanticStub() });
+    const config = counterConfig(0);
+    await repository.writeFile('src/app.ts', 'export const a = 1;\n');
+    await engine.check({ cwd: repository.path, config });
+    const result = await engine.check({ cwd: repository.path, config, scope: 'staged' });
+    expect(result.deterministicResults.map((r) => r.id).sort()).toEqual(['secret_scan', 'test']);
   });
 });
 
