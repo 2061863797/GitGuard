@@ -111,85 +111,25 @@ export interface DeterministicConfig {
 }
 
 /**
- * Supported System One question primitive formats.
- */
-export type SemanticQuestionType = 'boolean' | 'choice' | 'score';
-
-/**
- * Alias for SemanticQuestionType.
- */
-export type SemanticPrimitive = SemanticQuestionType;
-
-/**
- * Choice alternative for categorical semantic questions.
- */
-export interface SemanticQuestionChoice {
-  /** Unique value token (e.g. 'feature', 'bug_fix') */
-  value: string;
-  /** Description of what this category means */
-  description?: string;
-}
-
-/**
- * Score level descriptor for ranked semantic questions.
- */
-export interface SemanticQuestionLevel {
-  /** Level name (e.g. 'negligible', 'low', 'medium', 'high', 'critical') */
-  name: string;
-  /** Detailed definition of this level */
-  description: string;
-  /** Normalized score value (0.0 to 1.0) */
-  score?: number;
-}
-
-/**
- * Predefined canonical semantic question IDs supported by GitGuard.
- */
-export type StandardQuestionId =
-  | 'task_completed'
-  | 'task_scope_match'
-  | 'unrelated_changes'
-  | 'tests_required'
-  | 'tests_present'
-  | 'behavior_change'
-  | 'security_sensitive_change'
-  | 'breaking_change'
-  | 'debug_leftovers'
-  | 'regression_risk'
-  | 'change_type';
-
-/**
- * Semantic evaluation question formulated for System One / Jev.
+ * Yes/no semantic question sent to System One / Jev (noul primitive).
  */
 export interface SemanticQuestion {
-  /** Identifier matching standard question ID or custom rule ID */
-  id: StandardQuestionId | string;
-  /** Primitive format: 'boolean' (probability), 'choice' (enum), 'score' (rank) */
-  type: SemanticQuestionType;
-  /** Clear, single-intent, testable prompt string */
+  /** Identifier matching the originating QuestionSpec.id */
+  id: string;
+  /** Clear, single-intent, testable prompt string; "yes" means a problem exists */
   prompt: string;
-  /** Candidate options (for type: 'choice') */
-  choices?: string[] | SemanticQuestionChoice[];
-  /** Level benchmarks (for type: 'score') */
-  levels?: SemanticQuestionLevel[];
 }
 
 /**
- * Provider execution metadata tracking model versions, fallback states, and latency.
+ * Provider execution metadata tracking model versions and latency.
  */
 export interface ProviderMetadata {
-  /** Configured provider name (e.g., 'typesafe') */
-  requestedProvider: string;
-  /** Actual provider that executed the evaluation (e.g., 'typesafe' or 'mock') */
-  effectiveProvider: string;
+  /** Provider that executed the evaluation (e.g., 'typesafe') */
+  provider: string;
   /** Name of the requested model (e.g., 'jev-latest') */
   requestedModel?: string;
   /** Name/version of the effective model resolved by the API */
   effectiveModel?: string;
-  /** Whether a fallback occurred during evaluation */
-  fallback: boolean;
-  /** Diagnostic reason if fallback occurred */
-  fallbackReason?: string;
   /** Total evaluation round-trip latency in milliseconds */
   latencyMs?: number;
   /** Number of evaluated questions */
@@ -202,23 +142,15 @@ export interface ProviderMetadata {
 export interface SemanticDecision {
   /** Identifier matching the corresponding SemanticQuestion.id */
   id: string;
-  /** Probability value (0.0 to 1.0) for boolean/noul questions */
-  probability?: number;
-  /** Selected categorical value for choice questions */
-  value?: string;
-  /** Normalized score value (0.0 to 1.0) for score questions */
-  score?: number;
-  /** Raw unnormalized score returned directly by provider */
-  rawScore?: number;
-  /** Categorical level probabilities if returned for score questions */
-  probabilities?: Record<string, number>;
+  /** Probability (0.0 to 1.0) that the answer is "yes" */
+  probability: number;
   /** Decision confidence metric (0.0 to 1.0) */
   confidence?: number;
-  /** Name of provider producing this decision ('typesafe' | 'mock' | 'heuristic') */
+  /** Name of provider producing this decision */
   provider: string;
   /** Short explanation or rationale, if returned by the provider */
   rationale?: string;
-  /** Metadata on provider execution and fallback observability */
+  /** Metadata on provider execution */
   metadata?: ProviderMetadata;
 }
 
@@ -237,10 +169,10 @@ export type SemanticResult = SemanticDecision;
 
 /**
  * Abstract decision provider interface for semantic evaluations.
- * Decouples GitGuard Core from specific model services (TypeSafe, Mock, Local).
+ * Decouples GitGuard Core from the TypeSafe service so tests can inject stubs.
  */
 export interface DecisionProvider {
-  /** Unique provider identifier name (e.g., 'typesafe', 'mock') */
+  /** Unique provider identifier name (e.g., 'typesafe') */
   readonly name: string;
   /** Verify whether this provider is available (credentials present, online) */
   isAvailable(): Promise<boolean>;

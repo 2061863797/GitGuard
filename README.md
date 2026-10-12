@@ -1,242 +1,198 @@
 # GitGuard
 
 [![CI](https://github.com/2061863797/GitGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/2061863797/GitGuard/actions/workflows/ci.yml)
-[![Windows EXE](https://github.com/2061863797/GitGuard/actions/workflows/windows-exe.yml/badge.svg)](https://github.com/2061863797/GitGuard/actions/workflows/windows-exe.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-GitGuard 检查 Git 仓库中的代码改动，提供本地图形界面、命令行工具和 stdio MCP 服务。它汇总改动、扫描新增内容中的疑似密钥，按目标仓库配置运行测试、lint、类型检查和规则评估，最后给出 `PASS`、`WARN`、`REVIEW` 或 `BLOCK`。GitGuard 不会替你编写代码或创建提交。
+GitGuard 是给 AI 编程 agent 用的**提交前检查**。agent 写完代码、准备提交时调用它，它检查 Git 仓库里的改动，给出 `PASS`、`WARN`、`REVIEW` 或 `BLOCK`，并列出带 ID 的问题（finding）。agent 修完后再用这些 ID 复验。
 
-**Windows x64 用户建议先用 [GitHub Releases](https://github.com/2061863797/GitGuard/releases/latest) 中的 `GitGuard.exe`。** 同一个 EXE 可以运行 CLI 和 MCP，不需要安装 Node.js 或 pnpm 来启动 GitGuard；电脑仍需安装 Git。要从源码运行或开发本项目，再准备 Node.js 20+ 和 pnpm 9+。
+GitGuard 只负责检查：不改代码，不执行 `git add`、`commit`、`push`。
 
-## 目录
+## 它检查什么
 
-- [Windows EXE：下载与第一次检查](#windows-exe下载与第一次检查)
-- [源码运行](#源码运行)
-- [图形界面](#图形界面)
-- [CLI：命令、范围与结果](#cli命令范围与结果)
-- [MCP Server Setup](#mcp-server-setup)
-- [Configuration Reference](#configuration-reference-gitguardyml)
-- [CI 与开发验证](#ci-与开发验证)
-- [安全边界与许可](#安全边界与许可)
+每次检查由三部分组成：
 
-## Windows EXE：下载与第一次检查
+| 部分 | 内容 | 谁决定 |
+|:---|:---|:---|
+| **确定性检查** | 新增内容的密钥扫描（始终开启）；测试、lint、类型检查 | 测试、lint、类型检查的命令写在仓库的 `.gitguard.yml` 里，**没写就不执行** |
+| **agent 的题** | 针对本次任务的是/否问题，例如“是否用浮点数计算金额？” | 调用时由 agent 根据当前项目临时出题 |
+| **用户的题** | 每次都要问的是/否问题 | 写在 `.gitguard.yml` 的 `questions:` 里 |
 
-1. 从 [最新 Release](https://github.com/2061863797/GitGuard/releases/latest) 下载 `GitGuard.exe`，放在固定位置，例如 `C:\Tools\GitGuard\GitGuard.exe`。也可以下载 `GitGuard-Windows-x64.zip`，其中包含 EXE、使用说明和校验文件。
-2. 确认 Git 已安装，并能在 PowerShell 中运行 `git --version`。
-3. 把下面的 EXE 路径和目标仓库路径换成你自己的：
+agent 的题和用户的题会一起发给 [TypeSafe](https://typesafe.ai/) 的 System One（Jev）模型判断。题目都问成“问题是否存在”：回答“是”的概率 ≥ 0.5 时，按这道题的 `level` 记一个 finding。
 
-```powershell
-$gitguard = 'C:\Tools\GitGuard\GitGuard.exe'
-& $gitguard --version
-& $gitguard inspect --cwd 'C:\work\my-project'
+**不出题时不需要 API 密钥**，只跑确定性检查。出题时必须设置 `TYPESAFE_API_KEY`；如果缺少密钥或请求失败，GitGuard 会直接报错，不会用本地猜测的结果代替。
+
+## 安装
+
+前提：已安装 [Node.js](https://nodejs.org/) 20 或更高版本，以及 Git。
+
+### Claude Code
+
+```text
+/plugin marketplace add 2061863797/GitGuard
+/plugin install gitguard
 ```
 
-`inspect` 只查看选中范围的改动，不运行测试。要检查提交前**已经暂存**的改动：
+安装后会得到 `gitguard` MCP 服务和 `gitguard` skill。skill 告诉 agent 什么时候检查、怎么出题、怎么处理结果。
 
-```powershell
-& $gitguard check --offline --staged --task '修复登录超时' --cwd 'C:\work\my-project'
+### Codex
+
+```bash
+codex plugin marketplace add 2061863797/GitGuard
 ```
 
-`--offline` 让语义判断使用本地模拟提供方，不需要 API 密钥；它**不会跳过**测试、lint 或类型检查。`check` 会在目标仓库执行其 `.gitguard.yml` 中配置的命令；如果目标项目需要 Node.js、pnpm、Python 等工具链，这些工具仍须在运行环境中可用。第一次检查其他项目之前，请先看[配置说明](#configuration-reference-gitguardyml)。
+重启 Codex，在插件列表里启用 `gitguard`。Codex 启动插件里的 MCP 服务时可能只保留少数环境变量，所以插件显式声明了转发 `TYPESAFE_API_KEY`。这个变量本身要能被 Codex 读到，见下文[设置 API 密钥](#设置-api-密钥)。
 
-当前源码构建的 EXE 可运行 `& $gitguard ui --cwd 'C:\work\my-project'`，在本机浏览器打开图形界面；直接双击 EXE 不会自动打开。GitHub Release 中已有的 EXE 是否包含此命令，以该文件的 `--help` 输出为准。它目前未签名，Windows 可能显示安全提示；Release 提供的 `SHA256SUMS.txt` 可用于核对下载文件。更详细的操作步骤见 [Windows EXE 使用说明](docs/windows-exe.zh-CN.md)。
+### 其他 agent
 
-## 源码运行
-
-源码方式适用于非 Windows x64 系统，以及希望开发或修改 GitGuard 的用户。准备 Node.js 20+、Git 2.30+、pnpm 9+，然后在 **GitGuard 源码目录**运行：
-
-```powershell
-git clone https://github.com/2061863797/GitGuard.git
-cd GitGuard
-pnpm install --frozen-lockfile
-pnpm gitguard --help
-pnpm gitguard inspect --cwd 'C:\work\my-project'
-```
-
-`pnpm gitguard` 通过 `tsx` 直接运行源码，不需要先构建。要运行 `node bin/gitguard.js` 或让 MCP 客户端启动源码版本，先执行 `pnpm build`。Linux 和 macOS 用户把示例中的 Windows 路径换成自己的项目路径。
-
-本仓库定义的 npm 包名是 `gitguard-verify`，CLI 命令名是 `gitguard`。本文提供源码和 EXE 的启动方式；npm 的发布状态请在 [gitguard-verify 包页面](https://www.npmjs.com/package/gitguard-verify)核对，并确认其仓库链接，避免与同名 `gitguard` 包混淆。源码操作细节见 [中文版快速上手](docs/quickstart.zh-CN.md)。
-
-## 图形界面
-
-从 EXE 启动：
-
-```powershell
-& $gitguard ui --cwd 'C:\work\my-project'
-```
-
-从源码启动：`pnpm gitguard ui --cwd 'C:\work\my-project'`。`--cwd` 是初始仓库路径，也可在页面里输入其他 Git 仓库的**绝对路径**。界面只监听本机 `127.0.0.1`，会自动打开浏览器；无法自动打开时，复制终端显示的地址。关闭启动它的终端即可结束界面服务。
-
-页面右上角可切换中文和英文。点「选择目录」可浏览文件夹，也可点「用系统文件管理器选择」打开 Windows 文件夹选择器；列表将 Git 仓库分为已配置和未配置两组。还可直接填写仓库的绝对路径。未配置仓库可点「创建配置」生成 `.gitguard.yml`，测试、代码规范和类型检查命令可选，留空即禁用对应检查；密钥扫描始终开启，已有配置不会被覆盖。
-
-界面提供改动查看、完整检查、问题记录、复验以及 MCP 启动命令；结果可查看可视化、文本和原始 JSON。完整检查和复验仅使用官方 TypeSafe 在线语义判断，每次获取新结果，不使用本地模拟或语义缓存；启动前请按[在线密钥配置教程](docs/quickstart.zh-CN.md#在线检查配置-typesafe-api-key)设置 `TYPESAFE_API_KEY`。**完整检查和复验会执行目标仓库 `.gitguard.yml` 中配置的测试、lint 和类型检查命令**。快速查看只读取改动，不代表质量门禁通过。界面不会执行 Git add、commit、push 等写入命令。
-
-## CLI：命令、范围与结果
-
-以下示例延续上面的 PowerShell 变量 `$gitguard`。源码用户可以把 `& $gitguard` 换成 `pnpm gitguard`，并从 GitGuard 源码目录运行。
-
-| 命令 | 用途 |
-|:---|:---|
-| `inspect` | 汇总改动文件和 diff 统计；默认不执行项目检查或密钥扫描。 |
-| `check` | 对改动执行配置的测试、lint、类型检查、密钥扫描和规则评估。 |
-| `findings` | 查看已记录的 finding。 |
-| `verify` | 修改代码后重新验证指定 finding。 |
-| `ui` | 在本机浏览器打开图形操作界面。 |
-| `mcp` | 通过 stdio 启动 MCP 服务，供 MCP 客户端连接。 |
-
-常用范围：
-
-- 不指定范围时，`inspect` 和 CLI `check` 默认检查全部未提交改动。
-- `--staged` 只检查已 `git add` 的改动；`--working` 只检查未暂存改动。
-- `inspect --target HEAD` 查看指定提交；`inspect --target 'HEAD~1..HEAD'` 查看提交范围。
-- `base..head` 比较两个端点；`base...head` 比较共同祖先到 `head` 的改动，适合查看分支引入的变更。省略范围而传入 `target` 时，自动选择提交或提交范围。
-- `--cwd` 指向**要检查的 Git 仓库**，不是 EXE 所在目录。路径含空格时加引号。
-
-```powershell
-& $gitguard inspect --staged --cwd 'C:\work\my-project'
-& $gitguard inspect --target HEAD --cwd 'C:\work\my-project'
-& $gitguard check --offline --working --task '修复登录超时' --cwd 'C:\work\my-project'
-& $gitguard findings --cwd 'C:\work\my-project'
-& $gitguard verify --offline --findings '从 findings 输出复制的实际 ID' --cwd 'C:\work\my-project'
-```
-
-`check` 可加 `--json` 输出结构化结果；`--strict` 让 `WARN` 和 `REVIEW` 返回非零退出码。需要在线 TypeSafe/Jev 语义判断时，在运行环境中设置 `TYPESAFE_API_KEY`，去掉 `--offline`；`--require-semantic` 会在在线提供方不可用或回退时返回退出码 `2`。没有密钥时会使用本地模拟评估，不能把模拟结果当成在线模型结论。
-
-| 结果 | 默认退出码 | 应如何理解 |
-|:---|:---:|:---|
-| `PASS` | 0 | 当前**选中范围**未发现阻断项。先确认范围内确实有预期改动。 |
-| `WARN` | 0 | 有提示项，需要阅读具体 finding。 |
-| `REVIEW` | 0 | 有需要人工复核的风险；`--strict` 会使其返回非零退出码。 |
-| `BLOCK` | 1 | 有阻断项，修复后重新运行检查。 |
-
-若输出显示 `Files: 0` 或 `No changed files`，`PASS` 只表示选中的范围为空，并不代表目标项目的测试已经运行。检查 `git status`、`--cwd` 和 `--staged`/`--working` 是否选对；配置或 Git 错误也可能返回非零退出码。
-
-## MCP Server Setup
-
-`GitGuard.exe mcp` 会启动 stdio MCP 服务。**MCP 也只需要同一个 EXE**；MCP 客户端负责启动它，无需另开一个终端长期运行，也无需为 EXE 安装 Node.js 或 pnpm。客户端与 EXE 必须运行在能访问该 Windows 路径的同一环境，Git 也必须对客户端进程可用。
-
-### Codex 本地配置
-
-在本机 Codex 的 `~/.codex/config.toml` 中加入以下内容（Windows 通常位于 `%USERPROFILE%\.codex\config.toml`），将两条路径替换为实际存在的绝对路径。`cwd` 是 MCP 进程的默认工作目录，适合固定检查一个仓库；检查其他仓库时，在工具调用中传入目标仓库的 `cwd`。Codex 的 stdio MCP 配置字段见 [OpenAI Docs 的 MCP 指南](https://developers.openai.com/codex/mcp)。
-
-```toml
-[mcp_servers.gitguard]
-command = 'C:\Tools\GitGuard\GitGuard.exe'
-args = ["mcp"]
-cwd = 'C:\work\my-project'
-env_vars = ["TYPESAFE_API_KEY"]
-tool_timeout_sec = 180
-```
-
-先按[在线密钥配置教程](docs/quickstart.zh-CN.md#在线检查配置-typesafe-api-key)设置 `TYPESAFE_API_KEY`；`env_vars` 只转发环境变量名，不包含密钥值。`tool_timeout_sec` 是客户端的单次调用等待上限；项目检查较慢时，应根据检查命令和在线请求的总耗时调大。保存后重启客户端；Codex CLI 可运行 `codex mcp list` 确认服务器已配置。实际连接成功还应能看到下面列出的四个工具。
-
-### 使用 `mcpServers` JSON 的客户端
-
-有些客户端使用 JSON 格式；把示例放进该客户端自己的 MCP 配置文件。JSON 中的 Windows 反斜杠需要写成 `\\`：
-
-```json
-{
-  "mcpServers": {
-    "gitguard": {
-      "command": "C:\\Tools\\GitGuard\\GitGuard.exe",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-不同客户端的配置字段和重启方式可能不同，按该客户端的说明放置配置。这个 JSON 示例**不是** Codex 的 `config.toml` 格式。
-
-### 从源码启动 MCP
-
-已经按[源码运行](#源码运行)安装依赖并执行 `pnpm build` 后，客户端也可以用 Node.js 启动 `bin/gitguard.js`：
+任何支持 stdio MCP 的客户端都可以直接使用打包好的服务。先克隆本仓库，然后在客户端的 MCP 配置里写入（路径换成实际位置；JSON 里的 Windows 反斜杠要写成 `\\`）：
 
 ```json
 {
   "mcpServers": {
     "gitguard": {
       "command": "node",
-      "args": ["C:\\path\\to\\GitGuard\\bin\\gitguard.js", "mcp"]
+      "args": ["C:\\Tools\\GitGuard\\plugins\\gitguard\\server\\gitguard-mcp.mjs"],
+      "env": { "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}" }
     }
   }
 }
 ```
 
-### MCP 工具与使用
+`env` 的写法因客户端而异，按客户端的说明转发环境变量即可。如果客户端支持 SKILL.md 格式的 skill，把 [`plugins/gitguard/skills/gitguard`](plugins/gitguard/skills/gitguard/SKILL.md) 整个目录拷进它的 skills 目录。不支持 skill 的客户端仍会通过 MCP 的 server instructions 和工具描述拿到核心规则。
 
-| 工具 | 主要参数 | 作用 |
-|:---|:---|:---|
-| `inspect_changes` | `scope`、`target`、`task`、`cwd` / `repoPath` | 本地汇总改动，默认范围 `all`，不运行密钥扫描或项目检查。 |
-| `check_task_completion` | 必填非空 `task`；可选 `scope`、`target`、`cwd` / `repoPath` | 在线评估任务完成度、范围匹配和无关改动，不运行项目检查，可记录 finding。 |
-| `check_before_commit` | `task`、`scope`、`repoPath`、`cwd` | 运行质量门禁，默认范围 **`staged`**。 |
-| `verify_findings` | 必填非空字符串数组 `findingIds`；可选 `task`、`scope`、`target`、`cwd` / `repoPath` | 复查当前仓库中已有的 finding，并更新状态，默认范围 `all`。 |
+## 设置 API 密钥
 
-建议先调用 `inspect_changes` 确认仓库和范围；需要判断任务是否完成时调用 `check_task_completion`；准备提交时调用 `check_before_commit`；修复后用同一仓库和实际 finding ID 调用 `verify_findings`。四个工具均接受 `cwd` 或 `repoPath`，同时提供时必须指向同一路径。
+1. 登录 [TypeSafe 控制台](https://console.typesafe.ai/) 获取 API Key。
+2. 在 PowerShell 中保存为当前 Windows 用户的环境变量（输入不会显示，也不会进入命令历史）：
 
-三个语义工具要求新的 TypeSafe 在线结果，不使用本地模拟或语义缓存。`verify_findings` 遇到当前仓库不存在的 ID 时会提前返回 `BLOCK` 和 `unknownFindings`，此时不会运行项目检查或联网。缺少密钥或在线请求失败时返回工具错误。`check_before_commit` 和已知 ID 的复验会执行目标仓库配置的检查命令，这些命令可能写入文件。
+   ```powershell
+   $key = [System.Net.NetworkCredential]::new('', (Read-Host 'TypeSafe API Key' -AsSecureString)).Password
+   [Environment]::SetEnvironmentVariable('TYPESAFE_API_KEY', $key, 'User')
+   ```
 
-成功执行的结果同时提供 `structuredContent` 和内容相同的 JSON 文本。`PASS` / `BLOCK` 是检查结论，`isError: true` 表示参数或执行出错；`BLOCK` 本身不属于协议错误。`canCommit` 只表达本次门禁结果，不执行提交；范围为空时不能据此判断任务已完成。可复制的 JSON 调用、字段含义、错误码及排查步骤见 [MCP 调用指南](docs/mcp.zh-CN.md)。
+3. 完全退出并重新打开 Claude Code 或 Codex，让它们读到新的环境变量。
 
-`mcp` 是协议服务，不会像普通命令一样打印交互菜单；手动运行后等待输入是正常现象。`--debug` 的诊断写到 stderr，不占用 MCP 协议的 stdout。
+macOS / Linux 把 `export TYPESAFE_API_KEY=...` 写进 shell 配置文件即可。**不要**把密钥写进 `.gitguard.yml` 或其他仓库文件，GitGuard 会拒绝这种配置。
 
-## Configuration Reference (`.gitguard.yml`)
+## 配置 `.gitguard.yml`
 
-把 `.gitguard.yml` 放在**目标仓库根目录**。没有配置文件时使用 GitGuard 默认值；配置项会与默认值合并。首次运行其他项目的 `check` 前，先根据该项目技术栈确认命令：
-
-| 默认检查 | 默认命令 | 说明 |
-|:---|:---|:---|
-| 测试 | `pnpm test` | 目标项目需有对应脚本。 |
-| Lint | `pnpm lint` | 目标项目需有对应脚本。 |
-| 类型检查 | `pnpm tsc --noEmit` | 适用于相应的 TypeScript 项目。 |
-| 新增内容密钥扫描 | 启用 | 不依赖目标项目的包管理器。 |
-
-例如，一个用 npm 测试、暂时没有 lint 与类型检查命令的项目，可以先在**该项目**的 `.gitguard.yml` 中写入：
+把 `.gitguard.yml` 放在**被检查仓库**的根目录。没有这个文件时，只做密钥扫描。
 
 ```yaml
 version: 1
+
+# 确定性检查：写了 run 才会执行；超时单位为毫秒
 deterministic:
   test:
     run: "npm test"
+    timeout_ms: 120000
   lint:
-    enabled: false
+    run: "npm run lint"
   typecheck:
-    enabled: false
+    run: "npx tsc --noEmit"
+
+# 用户的题：每次检查都会问
+questions:
+  - id: money_float                     # 小写字母、数字、下划线
+    question: "Does this change calculate money with floating-point numbers?"
+    level: block                        # warn | review | block
+    files: ["src/billing/**"]           # 可选：改动没碰到这些文件就不问
+    exclude: ["**/*.test.ts"]           # 可选
 ```
 
-关闭检查会减少覆盖范围；有对应工具时，应把 `run` 调整为项目实际可运行的命令。配置的测试、lint、类型检查会在目标仓库执行，可能按该项目脚本写入文件。只对信任的仓库运行质量门禁。
+写题时注意：
 
-其他配置按用途分为：
+- **问成“问题是否存在”**，回答“是”就表示有问题。例如问“是否缺少回滚路径？”，不要问“是否有回滚路径？”。
+- `level` 是回答“是”时的结论：
+  - `warn`：提示一下；
+  - `review`：需要人判断；
+  - `block`：不能提交。
+
+其他可选配置：
 
 | 配置段 | 用途 |
 |:---|:---|
-| `context` | 限制 diff、周边代码、测试和仓库说明的上下文大小。 |
-| `system_one` | 选择 TypeSafe 或本地模拟提供方、模型及超时。 |
-| `deterministic` | 启停测试、lint、类型检查和密钥扫描，设置命令与超时。 |
-| `rules`、`custom_rules` | 设置内置规则阈值和项目自定义规则。 |
-| `privacy` | 设置敏感信息遮盖和排除路径。 |
-| `gate` | 设置阻断等级和缓存。 |
+| `context` | 限制发给模型的 diff、周边代码、相关测试和仓库说明的大小 |
+| `system_one` | 模型名（默认 `jev-latest`）和超时 |
+| `deterministic.secret_scan` | 追加自定义密钥正则 `patterns`；`block_on_detection: false` 时发现密钥判为 REVIEW 而不是 BLOCK |
+| `privacy` | 追加不发送给模型的路径 `exclude_paths`；不能关闭脱敏 |
 
-完整字段与可复制的样例见[本仓库的 `.gitguard.yml`](.gitguard.yml)；逐步说明见[中文版快速上手](docs/quickstart.zh-CN.md)。不要在 `.gitguard.yml` 中写 API 密钥，应使用运行环境的 `TYPESAFE_API_KEY`。
+完整示例见[本仓库自己的 `.gitguard.yml`](.gitguard.yml)。
 
-## CI 与开发验证
+> **从 0.2 升级**：`rules`、`custom_rules`、`gate`、`system_one.provider` 已经删除。配置里还有这些字段时，检查会报错并提示怎么迁移：把 `custom_rules` 的每一条改写成 `questions` 里的一道题，其余字段直接删掉。
 
-本仓库的 [CI 工作流](.github/workflows/ci.yml)运行 lint、类型检查、构建、测试及安装包检查。[Windows EXE 工作流](.github/workflows/windows-exe.yml)在 Windows 上运行测试和独立 EXE 检查；手动触发会上传 Actions 产物，推送与 `package.json` 版本匹配的 `v*` 标签会创建 GitHub Release。使用者请从 [Releases](https://github.com/2061863797/GitGuard/releases/latest) 下载正式版。
+## MCP 工具
 
-从源码开发时，在 GitGuard 仓库运行：
+### `check`
+
+| 参数 | 说明 |
+|:---|:---|
+| `cwd` | **必填**，被检查仓库的绝对路径 |
+| `scope` | `all`（默认，全部未提交改动）、`staged`、`working`、`commit`、`range` |
+| `target` | 提交或范围，如 `HEAD`、`main...feature`；传了会自动推断 `scope` |
+| `task` | 任务描述，作为背景信息发给模型 |
+| `questions` | 最多 10 道题，格式同 `.gitguard.yml` 的 `questions`（不含 `source`） |
+
+返回结果中的主要字段：
+
+- `status`：检查结论。
+- `canCommit`：结论不是 `BLOCK` 时为 `true`。
+- `deterministic`：每项确定性检查的状态。
+- `answers`：每道题的回答概率和理由。
+- `findings`：每个问题的 `id`、来源题目和修复建议。
+- `diffSummary`：改动统计。
+
+### `verify`
+
+| 参数 | 说明 |
+|:---|:---|
+| `cwd` | **必填**，仓库绝对路径 |
+| `findingIds` | 之前 `check` 返回的 finding ID |
+| `scope`、`target`、`task` | 同 `check` |
+
+`verify` 会重新跑确定性检查，并重新提问当初产生这些 finding 的题目，不需要 agent 再传一遍。传入当前仓库不存在的 ID 时，会直接返回 `BLOCK` 和 `unknownFindings`，不执行任何命令，也不联网。
+
+### 结论怎么看
+
+| 结论 | 含义 |
+|:---|:---|
+| `PASS` | 没有发现问题。先确认 `diffSummary.filesChanged` 大于 0，否则说明检查范围是空的 |
+| `WARN` | 有提示项，看一眼即可 |
+| `REVIEW` | 需要人判断 |
+| `BLOCK` | 不能提交，修复后用 `verify` 复验 |
+
+工具调用出错（参数无效、缺少密钥、配置有误）时返回 `isError: true` 和错误原文。`BLOCK` 是正常的检查结论，不算错误。
+
+## 安全
+
+- 测试、lint、类型检查命令会在被检查仓库里执行，可能运行项目脚本、写入文件。只检查你信任的仓库。
+- 发给模型的内容会排除敏感文件，并对已知格式的密钥脱敏；本地密钥扫描使用未脱敏的原始改动。脱敏基于规则，不能保证识别所有秘密。
+- finding 记录保存在被检查仓库的 `.git/gitguard/` 下。
+
+详细的威胁模型见 [SECURITY.md](SECURITY.md)。
+
+## 开发
 
 ```powershell
+pnpm install
 pnpm lint
 pnpm typecheck
-pnpm test
-pnpm test:pack
+pnpm test          # 会先执行 pnpm build
+pnpm bundle        # 重新生成 plugins/gitguard/server/gitguard-mcp.mjs
+pnpm test:bundle   # 从插件目录启动打包产物做冒烟测试
 ```
 
-`pnpm lint` 将警告也视为失败。`pnpm test` 和 `pnpm test:pack` 会先构建；直接运行 `pnpm exec vitest run ...` 前也须执行 `pnpm build`，否则真实 CLI / stdio 测试可能因缺少 `dist` 产物失败。
+插件安装时不会执行 `npm install`，所以打包产物 `plugins/gitguard/server/gitguard-mcp.mjs` 需要提交进仓库。改了 `src/` 后要运行 `pnpm bundle`，CI 会检查产物是否最新。
 
-Windows x64 上如需自己构建 EXE，使用 Node.js 24+ 和 `pnpm run build:exe`；构建后运行 `pnpm run test:exe`。输出位于 `dist-exe/GitGuard.exe`。普通源码 CLI 不要求 Node.js 24。
+发布新版本时，要同步更新这几处的版本号：`package.json`、`src/version.ts`、`plugins/gitguard/.claude-plugin/plugin.json`、`plugins/gitguard/.codex-plugin/plugin.json`。
 
-## 安全边界与许可
+```text
+src/                     MCP 服务源码（引擎、Git 读取、上下文、检查、策略、finding）
+plugins/gitguard/        插件本体：两份清单、Codex 的 MCP 配置、skill、打包产物
+.claude-plugin/          Claude Code 插件市场
+.agents/plugins/         Codex 插件市场
+```
 
-GitGuard 的 Git 读取不会修改暂存区或创建提交；`check` 和相应 MCP 工具会执行目标仓库配置的检查命令，这些命令可能修改文件。在线评估发送经敏感路径过滤和已知密钥格式脱敏的上下文，包括任务与关键词、diff、周边代码、相关测试和说明文件。脱敏基于规则，不能保证识别所有秘密；敏感项目应先检查 [SECURITY.md](SECURITY.md) 和 `.gitguard.yml` 中的隐私配置。
+## 许可
 
-GitGuard 使用 [Apache-2.0 许可](LICENSE)。
+[Apache-2.0](LICENSE)

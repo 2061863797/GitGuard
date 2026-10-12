@@ -1,777 +1,107 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import {
-  DefaultPolicyEngine,
-  synthesizeGateVerdict,
-  matchesGlob,
-  filterMatchingFiles,
-  evaluateNumericalThreshold,
-  evaluateScoreThreshold,
-  getEffectiveBuiltinRule,
-  evaluateSemanticRuleMatch,
-} from '../../../src/policy/index.js';
-import type { PolicyConfig, CustomPolicyRule } from '../../../src/types/policy.js';
-import type { DeterministicResult, SemanticDecision } from '../../../src/types/provider.js';
+/**
+ * tests/unit/policy/engine.test.ts
+ * DefaultPolicyEngine: deterministic results plus yes/no question answers.
+ */
+
+import { describe, it, expect } from 'vitest';
+import { DefaultPolicyEngine } from '../../../src/policy/engine.js';
+import { evaluateQuestion, questionAppliesTo, QUESTION_YES_THRESHOLD } from '../../../src/policy/rules.js';
+import { DEFAULT_POLICY_CONFIG } from '../../../src/policy/config.js';
 import type { EvaluationContext } from '../../../src/types/context.js';
-import { DefaultFindingManager } from '../../../src/findings/manager.js';
+import type { QuestionSpec } from '../../../src/types/policy.js';
+import type { DeterministicResult, SemanticDecision } from '../../../src/types/provider.js';
 
-describe('Policy Engine & Rule Evaluators', () => {
-  describe('synthesizeGateVerdict', () => {
-    it('should return PASS on empty array or undefined', () => {
-      expect(synthesizeGateVerdict([])).toBe('PASS');
-      expect(synthesizeGateVerdict(undefined as any)).toBe('PASS');
-    });
+function context(paths: string[]): EvaluationContext {
+  return {
+    diff: {
+      raw: paths.map((p) => `diff --git a/${p} b/${p}\n+change\n`).join(''),
+      files: paths.map((p) => ({
+        oldPath: p, newPath: p, status: 'modified', binary: false, additions: 1, deletions: 0,
+        hunks: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, header: '@@ -1,0 +1,1 @@', lines: [{ type: 'add', content: 'change' }] }],
+      })),
+      insertions: paths.length,
+      deletions: 0,
+    },
+    files: [],
+    instructions: [],
+    relatedTests: [],
+    repository: { rootPath: '/repo', headSha: 'abc', branch: 'main' },
+    evidence: [],
+  } as unknown as EvaluationContext;
+}
 
-    it('should return PASS when all items are pass/clean', () => {
-      expect(synthesizeGateVerdict(['PASS', 'pass'])).toBe('PASS');
-    });
+const question = (id: string, level: QuestionSpec['level'], extra: Partial<QuestionSpec> = {}): QuestionSpec => ({
+  id, question: `Is ${id} a problem?`, level, source: 'agent', ...extra,
+});
+const answer = (id: string, probability: number): SemanticDecision => ({ id, probability, provider: 'typesafe' });
+const passedSecretScan: DeterministicResult = { id: 'secret_scan', status: 'passed', durationMs: 0, violations: [] };
 
-    it('should return WARN when worst item is warn', () => {
-      expect(synthesizeGateVerdict(['PASS', 'WARN', 'pass'])).toBe('WARN');
-    });
-
-    it('should return REVIEW when review is present, dominating WARN and PASS', () => {
-      expect(synthesizeGateVerdict(['PASS', 'WARN', 'REVIEW'])).toBe('REVIEW');
-    });
-
-    it('should return BLOCK when block is present, dominating REVIEW, WARN, and PASS', () => {
-      expect(synthesizeGateVerdict(['PASS', 'WARN', 'REVIEW', 'BLOCK'])).toBe('BLOCK');
-      expect(synthesizeGateVerdict(['BLOCK', 'WARN'])).toBe('BLOCK');
-    });
-
-    it('should extract status from objects with status or verdict properties', () => {
-      const items = [
-        { status: 'warn' },
-        { status: 'review' },
-        { verdict: 'PASS' },
-      ];
-      expect(synthesizeGateVerdict(items as any)).toBe('REVIEW');
-    });
+describe('evaluateQuestion', () => {
+  it('triggers the question level at or above the 0.5 threshold', () => {
+    expect(QUESTION_YES_THRESHOLD).toBe(0.5);
+    expect(evaluateQuestion(answer('q', 0.49), question('q', 'block'), ['a.ts'])).toBeNull();
+    const match = evaluateQuestion(answer('q', 0.5), question('q', 'block'), ['a.ts'])!;
+    expect(match).toMatchObject({ ruleId: 'q', source: 'semantic', status: 'block', severity: 'CRITICAL', affectedFiles: ['a.ts'] });
+    expect(match.question?.id).toBe('q');
   });
 
-  describe('Glob Matching Utilities', () => {
-    it('matchesGlob should match simple patterns, wildcards, and directory stars', () => {
-      expect(matchesGlob('src/auth/jwt.ts', 'src/auth/**')).toBe(true);
-      expect(matchesGlob('src/auth/jwt.ts', '**/*.ts')).toBe(true);
-      expect(matchesGlob('src/auth/jwt.ts', '*.ts')).toBe(true); // basename fallback
-      expect(matchesGlob('src/auth/jwt.ts', 'src/payment/**')).toBe(false);
-      expect(matchesGlob('src/auth/jwt.test.ts', '**/*.test.ts')).toBe(true);
-    });
+  it.each([['warn', 'WARN'], ['review', 'ERROR'], ['block', 'CRITICAL']] as const)(
+    'maps level %s to severity %s', (level, severity) => {
+      expect(evaluateQuestion(answer('q', 0.9), question('q', level), [])?.severity).toBe(severity);
+    }
+  );
 
-    it('filterMatchingFiles should apply include and exclude glob patterns', () => {
-      const files = [
-        'src/auth/token.ts',
-        'src/auth/token.test.ts',
-        'src/payment/bill.ts',
-        'docs/readme.md',
-      ];
+  it('includes the rationale in the message when present', () => {
+    const match = evaluateQuestion({ ...answer('q', 0.8), rationale: 'floats used for cents' }, question('q', 'warn'), [])!;
+    expect(match.message).toContain('floats used for cents');
+  });
+});
 
-      const matched = filterMatchingFiles(files, ['src/auth/**'], ['**/*.test.ts']);
-      expect(matched).toEqual(['src/auth/token.ts']);
-    });
-
-    it('filterMatchingFiles should return empty array when includes is empty', () => {
-      expect(filterMatchingFiles(['src/auth.ts'], [])).toEqual([]);
-    });
+describe('questionAppliesTo', () => {
+  it('applies to all changed files without a filter, minus excludes', () => {
+    expect(questionAppliesTo(question('q', 'warn'), ['src/a.ts', 'src/a.test.ts'])).toEqual(['src/a.test.ts', 'src/a.ts']);
+    expect(questionAppliesTo(question('q', 'warn', { exclude: ['**/*.test.ts'] }), ['src/a.ts', 'src/a.test.ts'])).toEqual(['src/a.ts']);
+    expect(questionAppliesTo(question('q', 'warn', { exclude: ['**/*.ts'] }), ['src/a.ts'])).toBeNull();
   });
 
-  describe('Threshold Evaluators', () => {
-    describe('evaluateNumericalThreshold', () => {
-      it('should handle inverted thresholds (review_below, block_below)', () => {
-        const thresholds = { review_below: 0.6, block_below: 0.2 };
+  it('returns null when the file filter matches nothing', () => {
+    expect(questionAppliesTo(question('q', 'warn', { files: ['migrations/**'] }), ['src/a.ts'])).toBeNull();
+    expect(questionAppliesTo(question('q', 'warn', { files: ['src/**'] }), ['src/a.ts', 'docs/b.md'])).toEqual(['src/a.ts']);
+  });
+});
 
-        // 1. Below block_below -> block
-        const resBlock = evaluateNumericalThreshold(0.15, thresholds);
-        expect(resBlock.triggered).toBe(true);
-        expect(resBlock.status).toBe('block');
-        expect(resBlock.severity).toBe('CRITICAL');
+describe('DefaultPolicyEngine', () => {
+  const engine = new DefaultPolicyEngine();
 
-        // 2. Between block_below and review_below -> review
-        const resReview = evaluateNumericalThreshold(0.45, thresholds);
-        expect(resReview.triggered).toBe(true);
-        expect(resReview.status).toBe('review');
-        expect(resReview.severity).toBe('ERROR');
-
-        // 3. At or above review_below -> clean (not triggered)
-        const resPass = evaluateNumericalThreshold(0.6, thresholds);
-        expect(resPass.triggered).toBe(false);
-
-        const resHighPass = evaluateNumericalThreshold(0.95, thresholds);
-        expect(resHighPass.triggered).toBe(false);
-      });
-
-      it('should handle standard thresholds (warn, review, block)', () => {
-        const thresholds = { warn: 0.55, review: 0.75, block: 0.95 };
-
-        // 1. Above block -> block
-        const resBlock = evaluateNumericalThreshold(0.96, thresholds);
-        expect(resBlock.triggered).toBe(true);
-        expect(resBlock.status).toBe('block');
-        expect(resBlock.severity).toBe('CRITICAL');
-
-        // 2. Between review and block -> review
-        const resReview = evaluateNumericalThreshold(0.8, thresholds);
-        expect(resReview.triggered).toBe(true);
-        expect(resReview.status).toBe('review');
-        expect(resReview.severity).toBe('ERROR');
-
-        // 3. Between warn and review -> warn
-        const resWarn = evaluateNumericalThreshold(0.6, thresholds);
-        expect(resWarn.triggered).toBe(true);
-        expect(resWarn.status).toBe('warn');
-        expect(resWarn.severity).toBe('WARN');
-
-        // 4. Below warn -> not triggered
-        const resClean = evaluateNumericalThreshold(0.4, thresholds);
-        expect(resClean.triggered).toBe(false);
-      });
-    });
-
-    describe('evaluateScoreThreshold', () => {
-      it('should match categorical string scores against score level lists', () => {
-        const thresholds = {
-          warn_on: ['medium'],
-          review_on: ['high'],
-          block_on: ['critical'],
-        };
-
-        expect(evaluateScoreThreshold('critical', thresholds).status).toBe('block');
-        expect(evaluateScoreThreshold('high', thresholds).status).toBe('review');
-        expect(evaluateScoreThreshold('medium', thresholds).status).toBe('warn');
-        expect(evaluateScoreThreshold('low', thresholds).triggered).toBe(false);
-        expect(evaluateScoreThreshold('negligible', thresholds).triggered).toBe(false);
-      });
-
-      it('should map numeric scores to score levels when categorical lists are provided', () => {
-        const thresholds = {
-          warn_on: ['medium'],
-          review_on: ['high'],
-          block_on: ['critical'],
-        };
-
-        expect(evaluateScoreThreshold(0.95, thresholds).status).toBe('block');
-        expect(evaluateScoreThreshold(0.8, thresholds).status).toBe('review');
-        expect(evaluateScoreThreshold(0.5, thresholds).status).toBe('warn');
-        expect(evaluateScoreThreshold(0.1, thresholds).triggered).toBe(false);
-      });
-    });
+  it('passes when every question is answered no', () => {
+    const result = engine.evaluate([passedSecretScan], [answer('a', 0.1), answer('b', 0.2)],
+      [question('a', 'block'), question('b', 'review')], DEFAULT_POLICY_CONFIG, context(['src/x.ts']));
+    expect(result.verdict).toBe('PASS');
+    expect(result.findings).toEqual([]);
+    expect(result.passedRules).toEqual(expect.arrayContaining(['deterministic.secret_scan', 'a', 'b']));
   });
 
-  describe('DefaultPolicyEngine', () => {
-    let engine: DefaultPolicyEngine;
-    let mockContext: EvaluationContext;
-    let mockPolicy: PolicyConfig;
-
-    beforeEach(() => {
-      engine = new DefaultPolicyEngine();
-      mockPolicy = {
-        version: 1,
-        deterministic: {
-          test: { enabled: true, run: 'pnpm test', block_on_failure: true },
-          lint: { enabled: true, run: 'pnpm lint', block_on_failure: true },
-          typecheck: { enabled: true, run: 'pnpm tsc --noEmit', block_on_failure: true },
-          secret_scan: { enabled: true, block_on_detection: true },
-        },
-        rules: {
-          task_completed: { enabled: true, review_below: 0.6, block_below: 0.2 },
-          unrelated_changes: { enabled: true, warn: 0.55, review: 0.75, block: 0.95 },
-          tests_required: { enabled: true, warn: 0.6, review: 0.8 },
-          security_sensitive: { enabled: true, review: 0.65, block: 0.9 },
-          regression_risk: {
-            enabled: true,
-            warn_on: ['medium'],
-            review_on: ['high'],
-            block_on: ['critical'],
-          },
-        },
-      };
-
-      mockContext = {
-        task: {
-          task: 'Implement authentication token refresh logic',
-          source: 'cli',
-        },
-        diff: {
-          raw: 'diff --git a/src/auth/token.ts b/src/auth/token.ts\n+const token = "abc";\n',
-          files: [
-            {
-              newPath: 'src/auth/token.ts',
-              status: 'modified',
-              binary: false,
-              additions: 1,
-              deletions: 0,
-              hunks: [],
-            },
-          ],
-          insertions: 1,
-          deletions: 0,
-          truncated: false,
-        },
-        files: [],
-        instructions: [],
-        relatedTests: [],
-        repository: {
-          root: '/mock/repo',
-          branch: 'main',
-          headSha: '1234567890abcdef',
-          isClean: false,
-        },
-      };
-    });
-
-    it('returns PASS for an empty changeset with no rule violations', () => {
-      const emptyContext: EvaluationContext = {
-        ...mockContext,
-        diff: {
-          raw: '',
-          files: [],
-          insertions: 0,
-          deletions: 0,
-          truncated: false,
-        },
-      };
-
-      const result = engine.evaluate([], [], mockPolicy, emptyContext);
-
-      expect(result.verdict).toBe('PASS');
-      expect(result.summary).toContain('Gate verdict: PASS');
-      expect(result.ruleMatches).toHaveLength(0);
-      expect(result.findings).toHaveLength(0);
-      expect(result.passedRules).toHaveLength(0);
-      expect(result.violatedRules).toHaveLength(0);
-    });
-
-    describe('Deterministic Evaluations', () => {
-      it('should record passed deterministic checks in passedRules', () => {
-        const deterministicResults: DeterministicResult[] = [
-          {
-            id: 'test',
-            status: 'passed',
-            exitCode: 0,
-            durationMs: 1200,
-          },
-          {
-            id: 'lint',
-            status: 'passed',
-            exitCode: 0,
-            durationMs: 800,
-          },
-        ];
-
-        const result = engine.evaluate(deterministicResults, [], mockPolicy, mockContext);
-
-        expect(result.verdict).toBe('PASS');
-        expect(result.passedRules).toContain('deterministic.test');
-        expect(result.passedRules).toContain('deterministic.lint');
-        expect(result.violatedRules).toHaveLength(0);
-      });
-
-      it('should emit BLOCK violation when test check fails and block_on_failure is true', () => {
-        const deterministicResults: DeterministicResult[] = [
-          {
-            id: 'test',
-            status: 'failed',
-            exitCode: 1,
-            durationMs: 1500,
-            stderr: 'FAIL tests/auth.test.ts: Token expired',
-          },
-        ];
-
-        const result = engine.evaluate(deterministicResults, [], mockPolicy, mockContext);
-
-        expect(result.verdict).toBe('BLOCK');
-        expect(result.violatedRules).toContain('deterministic.test');
-        expect(result.passedRules).not.toContain('deterministic.test');
-        expect(result.ruleMatches[0].status).toBe('block');
-        expect(result.ruleMatches[0].severity).toBe('CRITICAL');
-        expect(result.findings[0].id).toMatch(/^finding_deterministic_test_/);
-      });
-
-      it('should emit REVIEW violation when test check fails and block_on_failure is false', () => {
-        const advisoryPolicy: PolicyConfig = {
-          ...mockPolicy,
-          deterministic: {
-            test: { enabled: true, run: 'pnpm test', block_on_failure: false },
-          },
-        };
-
-        const deterministicResults: DeterministicResult[] = [
-          {
-            id: 'test',
-            status: 'failed',
-            exitCode: 1,
-            durationMs: 1500,
-            stderr: '1 test failed',
-          },
-        ];
-
-        const result = engine.evaluate(deterministicResults, [], advisoryPolicy, mockContext);
-
-        expect(result.verdict).toBe('REVIEW');
-        expect(result.ruleMatches[0].status).toBe('review');
-        expect(result.ruleMatches[0].severity).toBe('ERROR');
-      });
-
-      it('should emit BLOCK violation when secret scanner detects credentials', () => {
-        const deterministicResults: DeterministicResult[] = [
-          {
-            id: 'secret_scan',
-            status: 'failed',
-            durationMs: 100,
-            violations: [
-              {
-                file: 'src/auth.ts',
-                line: 12,
-                rule: 'aws_access_key',
-                message: 'AWS Access Key detected',
-                severity: 'block',
-              },
-            ],
-          },
-        ];
-
-        const result = engine.evaluate(deterministicResults, [], mockPolicy, mockContext);
-
-        expect(result.verdict).toBe('BLOCK');
-        expect(result.violatedRules).toContain('deterministic.secret_scan');
-        expect(result.ruleMatches[0].severity).toBe('CRITICAL');
-        expect(result.ruleMatches[0].evidence[0].type).toBe('secret_detected');
-        expect(result.ruleMatches[0].evidence[0].path).toBe('src/auth.ts');
-      });
-
-      it('should skip disabled deterministic checks', () => {
-        const disabledPolicy: PolicyConfig = {
-          ...mockPolicy,
-          deterministic: {
-            test: { enabled: false, run: 'pnpm test' },
-          },
-        };
-
-        const deterministicResults: DeterministicResult[] = [
-          {
-            id: 'test',
-            status: 'failed',
-            exitCode: 1,
-            durationMs: 100,
-          },
-        ];
-
-        const result = engine.evaluate(deterministicResults, [], disabledPolicy, mockContext);
-
-        expect(result.verdict).toBe('PASS');
-        expect(result.violatedRules).not.toContain('deterministic.test');
-      });
-    });
-
-    describe('Standard Semantic Rule Evaluations', () => {
-      it.each([[0.19, 'BLOCK'], [0.2, 'REVIEW'], [0.3, 'REVIEW'], [0.59, 'REVIEW'], [0.6, 'PASS']])(
-        'applies task thresholds on an empty changeset at probability %s',
-        (probability, verdict) => {
-          const emptyContext = { ...mockContext, diff: { ...mockContext.diff, raw: '', files: [] } };
-          const decision = { id: 'task_completed', probability: probability as number, provider: 'mock' as const };
-          expect(engine.evaluate([], [decision], mockPolicy, emptyContext).verdict).toBe(verdict);
-          expect(engine.evaluate([], [decision], mockPolicy, mockContext).verdict).toBe(verdict);
-        }
-      );
-
-      it('honors configured task thresholds and disabled rules on an empty changeset', () => {
-        const emptyContext = { ...mockContext, diff: { ...mockContext.diff, raw: '', files: [] } };
-        const decisions = [{ id: 'task_completed', probability: 0.3, provider: 'mock' as const }];
-        const policy = { ...mockPolicy, rules: { task_completed: { block_below: 0.5, review_below: 0.8 } } };
-        expect(engine.evaluate([], decisions, policy, emptyContext).verdict).toBe('BLOCK');
-        policy.rules.task_completed = { ...policy.rules.task_completed, enabled: false };
-        expect(engine.evaluate([], decisions, policy, emptyContext).verdict).toBe('PASS');
-      });
-
-      it('honors non-task semantic violations on an empty changeset', () => {
-        const emptyContext = { ...mockContext, diff: { ...mockContext.diff, raw: '', files: [] } };
-        expect(engine.evaluate([], [{ id: 'security_sensitive_change', probability: 0.95, provider: 'mock' }],
-          mockPolicy, emptyContext).verdict).toBe('BLOCK');
-      });
-
-      it('should evaluate task_completed with inverted thresholds (review_below / block_below)', () => {
-        // Case 1: prob = 0.15 (< block_below 0.20) -> BLOCK
-        const decisionsBlock: SemanticDecision[] = [
-          {
-            id: 'task_completed',
-            probability: 0.15,
-            provider: 'mock',
-            rationale: 'Major requirements unfulfilled',
-          },
-        ];
-        const resBlock = engine.evaluate([], decisionsBlock, mockPolicy, mockContext);
-        expect(resBlock.verdict).toBe('BLOCK');
-        expect(resBlock.violatedRules).toContain('task_completed');
-
-        // Case 2: prob = 0.45 (< review_below 0.60) -> REVIEW
-        const decisionsReview: SemanticDecision[] = [
-          {
-            id: 'task_completed',
-            probability: 0.45,
-            provider: 'mock',
-            rationale: 'Partial requirements fulfilled',
-          },
-        ];
-        const resReview = engine.evaluate([], decisionsReview, mockPolicy, mockContext);
-        expect(resReview.verdict).toBe('REVIEW');
-        expect(resReview.violatedRules).toContain('task_completed');
-
-        // Case 3: prob = 0.90 (>= 0.60) -> PASS
-        const decisionsPass: SemanticDecision[] = [
-          {
-            id: 'task_completed',
-            probability: 0.9,
-            provider: 'mock',
-            rationale: 'Task fully completed',
-          },
-        ];
-        const resPass = engine.evaluate([], decisionsPass, mockPolicy, mockContext);
-        expect(resPass.verdict).toBe('PASS');
-        expect(resPass.passedRules).toContain('task_completed');
-      });
-
-      it('should treat task_completed as passed when context.task is absent or empty', () => {
-        const noTaskContext: EvaluationContext = {
-          ...mockContext,
-          task: undefined,
-        };
-
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'task_completed',
-            probability: 0.1, // low prob, but no task was declared
-            provider: 'mock',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, mockPolicy, noTaskContext);
-
-        expect(result.verdict).toBe('PASS');
-        expect(result.passedRules).toContain('task_completed');
-        expect(result.violatedRules).not.toContain('task_completed');
-      });
-
-      it('should evaluate unrelated_changes with standard thresholds', () => {
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'unrelated_changes',
-            probability: 0.8, // >= 0.75 review threshold
-            provider: 'mock',
-            rationale: 'Unrelated payment changes found in auth task',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, mockPolicy, mockContext);
-
-        expect(result.verdict).toBe('REVIEW');
-        expect(result.violatedRules).toContain('unrelated_changes');
-      });
-
-      it('should evaluate tests_required and security_sensitive (including security_sensitive_change alias)', () => {
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'tests_required',
-            probability: 0.85, // >= 0.80 review threshold
-            provider: 'mock',
-          },
-          {
-            id: 'security_sensitive_change', // question alias for security_sensitive rule
-            probability: 0.95, // >= 0.90 block threshold
-            provider: 'mock',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, mockPolicy, mockContext);
-
-        // Security block dominates tests_required review
-        expect(result.verdict).toBe('BLOCK');
-        expect(result.violatedRules).toContain('security_sensitive');
-        expect(result.violatedRules).toContain('tests_required');
-      });
-
-      it('should evaluate regression_risk categorical score thresholds', () => {
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'regression_risk',
-            value: 'critical',
-            score: 1.0,
-            provider: 'mock',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, mockPolicy, mockContext);
-
-        expect(result.verdict).toBe('BLOCK');
-        expect(result.violatedRules).toContain('regression_risk');
-      });
-    });
-
-    describe('Custom Repository Policy Rules', () => {
-      it('should evaluate custom rule when changed files match glob pattern', () => {
-        const customRule: CustomPolicyRule = {
-          id: 'auth_requires_tests',
-          description: 'Modifications to auth require test coverage',
-          files: ['src/auth/**'],
-          exclude: ['**/*.test.ts'],
-          question: 'Does this change modify authentication without regression tests?',
-          review: 0.7,
-        };
-
-        const customPolicy: PolicyConfig = {
-          ...mockPolicy,
-          custom_rules: [customRule],
-        };
-
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'auth_requires_tests',
-            probability: 0.82,
-            provider: 'mock',
-            rationale: 'Auth modified without tests',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, customPolicy, mockContext);
-
-        expect(result.verdict).toBe('REVIEW');
-        expect(result.violatedRules).toContain('auth_requires_tests');
-        expect(result.ruleMatches[0].ruleId).toBe('auth_requires_tests');
-        expect(result.ruleMatches[0].affectedFiles).toEqual(['src/auth/token.ts']);
-      });
-
-      it('should skip custom rule when changed files do NOT match glob pattern', () => {
-        const customRule: CustomPolicyRule = {
-          id: 'billing_protection',
-          description: 'Billing changes require review',
-          files: ['src/billing/**'],
-          question: 'Billing altered?',
-          block: 0.8,
-        };
-
-        const customPolicy: PolicyConfig = {
-          ...mockPolicy,
-          custom_rules: [customRule],
-        };
-
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'billing_protection',
-            probability: 0.99,
-            provider: 'mock',
-          },
-        ];
-
-        // mockContext only modifies src/auth.ts
-        const result = engine.evaluate([], decisions, customPolicy, mockContext);
-
-        expect(result.verdict).toBe('PASS');
-        expect(result.violatedRules).not.toContain('billing_protection');
-      });
-
-      it('should skip disabled custom rules', () => {
-        const customRule: CustomPolicyRule = {
-          id: 'disabled_rule',
-          enabled: false,
-          files: ['src/**'],
-          question: 'Question?',
-          block: 0.5,
-        };
-
-        const customPolicy: PolicyConfig = {
-          ...mockPolicy,
-          custom_rules: [customRule],
-        };
-
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'disabled_rule',
-            probability: 0.95,
-            provider: 'mock',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, customPolicy, mockContext);
-
-        expect(result.verdict).toBe('PASS');
-        expect(result.violatedRules).not.toContain('disabled_rule');
-      });
-    });
-
-    describe('Worst-Case Hierarchy Integration', () => {
-      it('should synthesize worst-case verdict when multiple layers produce signals', () => {
-        // Deterministic passes, semantic tests_required is WARN, unrelated_changes is REVIEW, security is BLOCK
-        const deterministicResults: DeterministicResult[] = [
-          { id: 'test', status: 'passed', exitCode: 0, durationMs: 500 },
-          { id: 'lint', status: 'passed', exitCode: 0, durationMs: 300 },
-        ];
-
-        const decisions: SemanticDecision[] = [
-          { id: 'tests_required', probability: 0.65, provider: 'mock' }, // WARN (>= 0.60)
-          { id: 'unrelated_changes', probability: 0.78, provider: 'mock' }, // REVIEW (>= 0.75)
-          { id: 'security_sensitive', probability: 0.92, provider: 'mock' }, // BLOCK (>= 0.90)
-        ];
-
-        const result = engine.evaluate(deterministicResults, decisions, mockPolicy, mockContext);
-
-        expect(result.verdict).toBe('BLOCK');
-        expect(result.findings).toHaveLength(3);
-        expect(result.passedRules).toContain('deterministic.test');
-        expect(result.passedRules).toContain('deterministic.lint');
-        expect(result.violatedRules).toEqual(['unrelated_changes', 'tests_required', 'security_sensitive']);
-      });
-
-      it('should allow injecting custom FindingManager in constructor', () => {
-        const customFindingManager = new DefaultFindingManager();
-        const customEngine = new DefaultPolicyEngine(customFindingManager);
-
-        const result = customEngine.evaluate(
-          [
-            {
-              id: 'test',
-              status: 'failed',
-              exitCode: 1,
-              durationMs: 100,
-            },
-          ],
-          [],
-          mockPolicy,
-          mockContext
-        );
-
-        expect(result.findings).toHaveLength(1);
-        expect(customFindingManager.getFindings()).toHaveLength(1);
-      });
-
-      it('engine.synthesizeVerdict delegates directly to synthesizeGateVerdict', () => {
-        expect(engine.synthesizeVerdict(['WARN', 'PASS'])).toBe('WARN');
-        expect(engine.synthesizeVerdict(['BLOCK', 'REVIEW'])).toBe('BLOCK');
-      });
-
-      it('should skip built-in rule when disabled via policy config', () => {
-        const disabledPolicy: PolicyConfig = {
-          ...mockPolicy,
-          rules: {
-            tests_required: { enabled: false },
-          },
-        };
-
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'tests_required',
-            probability: 0.99,
-            provider: 'mock',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, disabledPolicy, mockContext);
-        expect(result.violatedRules).not.toContain('tests_required');
-      });
-
-      it('should record custom rule as passed when decision does not violate thresholds', () => {
-        const customRule: CustomPolicyRule = {
-          id: 'auth_requires_tests',
-          files: ['src/auth/**'],
-          question: 'Auth tests?',
-          review: 0.8,
-        };
-
-        const customPolicy: PolicyConfig = {
-          ...mockPolicy,
-          custom_rules: [customRule],
-        };
-
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'auth_requires_tests',
-            probability: 0.2, // well below review 0.80
-            provider: 'mock',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, customPolicy, mockContext);
-        expect(result.verdict).toBe('PASS');
-        expect(result.passedRules).toContain('auth_requires_tests');
-      });
-    });
-
-    describe('Helper Edge Cases', () => {
-      it('getEffectiveBuiltinRule returns null for nonexistent rule or disabled rule', () => {
-        expect(getEffectiveBuiltinRule('nonexistent_rule', mockPolicy)).toBeNull();
-        expect(
-          getEffectiveBuiltinRule('tests_required', {
-            version: 1,
-            rules: { tests_required: { enabled: false } },
-          })
-        ).toBeNull();
-      });
-
-      it('evaluateSemanticRuleMatch returns null when rule is disabled', () => {
-        const rule = {
-          id: 'disabled_rule',
-          enabled: false,
-        };
-        const decision: SemanticDecision = {
-          id: 'disabled_rule',
-          probability: 0.99,
-          provider: 'mock',
-        };
-        expect(evaluateSemanticRuleMatch(decision, rule as any, mockContext)).toBeNull();
-      });
-
-      it('evaluateScoreThreshold returns triggered false on invalid input type', () => {
-        expect(evaluateScoreThreshold(null as any, {})).toEqual({ triggered: false });
-      });
-
-      it('evaluateScoreThreshold maps 1.05 to low instead of critical block', () => {
-        const thresholds = {
-          warn_on: ['medium'],
-          review_on: ['high'],
-          block_on: ['critical'],
-        };
-        // 1.05 on a 0..4 score scale should normalize to low and not trigger block
-        const res = evaluateScoreThreshold(1.05, thresholds);
-        expect(res.triggered).toBe(false);
-      });
-      it('passes tests_required when test files are present in the changeset', () => {
-        const contextWithTests: EvaluationContext = {
-          ...mockContext,
-          diff: {
-            scope: 'staged',
-            raw: 'diff --git a/tests/auth.test.ts b/tests/auth.test.ts',
-            files: [
-              {
-                path: 'src/auth.ts',
-                newPath: 'src/auth.ts',
-                status: 'modified',
-                additions: 50,
-                deletions: 0,
-                hunks: [],
-              },
-              {
-                path: 'tests/auth.test.ts',
-                newPath: 'tests/auth.test.ts',
-                status: 'added',
-                additions: 30,
-                deletions: 0,
-                hunks: [],
-              },
-            ],
-            summary: { filesChanged: 2, insertions: 80, deletions: 0 },
-          },
-        };
-
-        const decisions: SemanticDecision[] = [
-          {
-            id: 'tests_required',
-            probability: 0.85, // Above review threshold (0.80)
-            provider: 'mock',
-          },
-        ];
-
-        const result = engine.evaluate([], decisions, mockPolicy, contextWithTests);
-        // Even though tests_required probability is 0.85, test files exist, so it should PASS
-        expect(result.passedRules).toContain('tests_required');
-        expect(result.violatedRules).not.toContain('tests_required');
-      });
-    });
+  it('uses the worst level among yes answers and creates findings', () => {
+    const result = engine.evaluate([passedSecretScan], [answer('a', 0.9), answer('b', 0.7), answer('c', 0.1)],
+      [question('a', 'warn'), question('b', 'review'), question('c', 'block')], DEFAULT_POLICY_CONFIG, context(['src/x.ts']));
+    expect(result.verdict).toBe('REVIEW');
+    expect(result.violatedRules.sort()).toEqual(['a', 'b']);
+    expect(result.findings.map((f) => f.ruleId).sort()).toEqual(['a', 'b']);
+    expect(result.findings[0].metadata?.question).toBeDefined();
+  });
+
+  it('blocks on a failed deterministic check regardless of answers', () => {
+    const failedTest: DeterministicResult = { id: 'test', status: 'failed', exitCode: 1, durationMs: 5, summary: 'tests failed' };
+    const config = { ...DEFAULT_POLICY_CONFIG, deterministic: { ...DEFAULT_POLICY_CONFIG.deterministic, test: { enabled: true, run: 'pnpm test' } } };
+    const result = engine.evaluate([passedSecretScan, failedTest], [], [], config, context(['src/x.ts']));
+    expect(result.verdict).toBe('BLOCK');
+    expect(result.violatedRules).toEqual(['deterministic.test']);
+  });
+
+  it('ignores questions that were not answered or do not apply to the changed files', () => {
+    const result = engine.evaluate([passedSecretScan], [answer('scoped', 0.99)],
+      [question('scoped', 'block', { files: ['migrations/**'] }), question('unanswered', 'block')],
+      DEFAULT_POLICY_CONFIG, context(['src/x.ts']));
+    expect(result.verdict).toBe('PASS');
   });
 });

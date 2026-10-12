@@ -103,37 +103,6 @@ export function getDefaultExpectedEvidence(ruleId: string, status: FindingStatus
       'Rotate any secrets that were committed or staged.',
     ];
   }
-  if (normalizedId.includes('task_completed')) {
-    return [
-      'Implement the missing requirements declared in the task specification.',
-      'Ensure all acceptance criteria are demonstrably met by the changeset.',
-    ];
-  }
-  if (normalizedId.includes('unrelated_changes')) {
-    return [
-      'Remove or isolate changes that are not directly relevant to the assigned task.',
-      'Split tangential refactorings or file alterations into separate commits or PRs.',
-    ];
-  }
-  if (normalizedId.includes('tests_required')) {
-    return [
-      'Add automated unit or integration tests that exercise the newly added or modified logic.',
-      'Ensure the test suite passes cleanly.',
-    ];
-  }
-  if (normalizedId.includes('security')) {
-    return [
-      'Perform a security review on authentication, cryptography, or permission modifications.',
-      'Add security-focused regression tests validating authorization boundaries.',
-    ];
-  }
-  if (normalizedId.includes('regression_risk')) {
-    return [
-      'Provide regression tests verifying backward compatibility.',
-      'Check core public interfaces and verify that no unintended side-effects are introduced.',
-    ];
-  }
-
   return [
     `Remediate the policy violation identified by rule '${ruleId}'.`,
     `Ensure the gate status criteria (${status.toUpperCase()}) are satisfied.`,
@@ -255,7 +224,7 @@ export class DefaultFindingManager implements FindingManager {
         fingerprint,
         createdAt: timestamp,
         provenance,
-        metadata: match.score !== undefined ? { score: match.score } : undefined,
+        metadata: match.question ? { question: match.question } : undefined,
       };
 
       this.findingsStore.set(finding.id, finding);
@@ -443,7 +412,6 @@ export class DefaultFindingManager implements FindingManager {
         timestamp: new Date().toISOString(),
         gitRoot: process.cwd(),
         headSha: '',
-        cacheHit: false,
       },
     };
 

@@ -5,64 +5,75 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { CallToolResult, TextContent, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { GitGuardEngine } from '../../types/engine.js';
-import { DefaultGitGuardEngine } from '../../core/engine.js';
+import { DefaultGitGuardEngine, MAX_AGENT_QUESTIONS } from '../../core/engine.js';
 import type { ChangeScope } from '../../types/git.js';
 import type { SemanticDecision } from '../../types/provider.js';
+import type { Finding } from '../../types/finding.js';
 import { redactSecrets } from '../../context/filter.js';
+import { QUESTION_ID_PATTERN, QUESTION_LEVELS } from '../../policy/config.js';
+
+/**
+ * Rules every client sees, whether or not it loads the GitGuard skill.
+ */
+export const GITGUARD_SERVER_INSTRUCTIONS = [
+  'GitGuard checks code changes in a Git repository before they are committed.',
+  'Call check after finishing a task and before committing; call verify with the finding IDs after fixing them.',
+  'check runs secret scanning plus the test/lint/typecheck commands configured in the repository .gitguard.yml,',
+  'and asks TypeSafe System One yes/no questions: questions you pass in, plus questions from .gitguard.yml.',
+  'Write 3-6 questions specific to this task and project, one concern each, phrased so that "yes" means a problem exists',
+  '(e.g. "Does this change compute money with floating point?"). level is what a "yes" means: warn (mention it),',
+  'review (the user must decide) or block (must not be committed). Questions require TYPESAFE_API_KEY; without questions no key is needed.',
+  'BLOCK: fix the cause and verify. REVIEW: report to the user. WARN: mention it.',
+  'Never delete or weaken questions, lower a level, or edit .gitguard.yml to make a check pass, and never commit past a BLOCK.',
+].join(' ');
 
 const changeScope = z.enum(['staged', 'working', 'all', 'commit', 'range']);
 const text = z.string().trim().min(1);
-const repositoryFields = {
-  cwd: text.describe('Repository working directory; defaults to the server working directory.').optional(),
-  repoPath: text.describe('Alias for cwd. If both are supplied they must resolve to the same path.').optional(),
-};
-const taskField = text.describe('Natural language task intent.');
+const cwdField = text.describe('Absolute path of the Git repository to check. Required: the server does not run inside your project.');
+const taskField = text.describe('Natural language description of the task the changes implement; sent to System One as context.');
 const targetField = text.describe('Commit or complete base..head / base...head range. Required for commit/range; infers scope when omitted.').optional();
+const scopeField = changeScope.describe('Default: all (staged + unstaged); a target infers commit/range.').optional();
+
+const questionSchema = z.strictObject({
+  id: z.string().regex(QUESTION_ID_PATTERN).describe('Stable id, [a-z0-9_], unique within the check and not used by .gitguard.yml.'),
+  question: z.string().trim().min(1).max(1000).describe('Yes/no question in which "yes" means the problem exists.'),
+  level: z.enum(QUESTION_LEVELS).describe('Finding level when the answer is yes: warn, review or block.'),
+  files: z.array(text).optional().describe('Optional globs; the question is skipped when no changed file matches.'),
+  exclude: z.array(text).optional().describe('Optional globs excluded from files.'),
+});
 
 const INPUT_SCHEMAS = {
-  inspect_changes: z.strictObject({
-    ...repositoryFields,
-    scope: changeScope.describe('Default: all; a target infers commit/range.').optional(),
+  check: z.strictObject({
+    cwd: cwdField,
+    scope: scopeField,
     target: targetField,
     task: taskField.optional(),
+    questions: z.array(questionSchema).max(MAX_AGENT_QUESTIONS)
+      .describe(`Up to ${MAX_AGENT_QUESTIONS} task-specific yes/no questions. Omit to run only deterministic checks and .gitguard.yml questions.`)
+      .optional(),
   }),
-  check_task_completion: z.strictObject({
-    ...repositoryFields,
-    task: taskField,
-    scope: changeScope.describe('Default: all; a target infers commit/range.').optional(),
+  verify: z.strictObject({
+    cwd: cwdField,
+    findingIds: z.array(text).min(1).describe('Finding IDs returned by an earlier check in this repository.'),
+    scope: scopeField,
     target: targetField,
-  }),
-  check_before_commit: z.strictObject({
-    ...repositoryFields,
     task: taskField.optional(),
-    scope: z.enum(['staged', 'working', 'all']).describe('Default: staged.').optional(),
-  }),
-  verify_findings: z.strictObject({
-    ...repositoryFields,
-    findingIds: z.array(text).min(1).describe('Non-empty finding IDs previously recorded in this repository.'),
-    task: taskField.optional(),
-    scope: changeScope.describe('Default: all; a target infers commit/range.').optional(),
-    target: targetField,
   }),
 };
 
 type ToolName = keyof typeof INPUT_SCHEMAS;
+type ToolParameters = z.infer<(typeof INPUT_SCHEMAS)['check']> & Partial<z.infer<(typeof INPUT_SCHEMAS)['verify']>>;
 
 const TOOL_METADATA: Record<ToolName, Pick<Tool, 'description' | 'annotations'>> = {
-  inspect_changes: {
-    description: 'Inspect changed files and diff statistics locally. Does not run project checks, scan secrets, contact a provider, or persist findings.',
-    annotations: { readOnlyHint: true, openWorldHint: false },
-  },
-  check_task_completion: {
-    description: 'Evaluate task completion, scope match and unrelated changes with a fresh online TypeSafe response. Does not run project checks; may persist findings. Requires a TypeSafe key and rejects mock/fallback results.',
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  },
-  check_before_commit: {
-    description: 'Run the quality gate on staged changes by default. Executes trusted repository test/lint/typecheck commands which may write files, persists findings, and requires fresh online TypeSafe results.',
+  check: {
+    description: 'Run the GitGuard gate on changes in cwd: secret scan, the repository-configured test/lint/typecheck commands, ' +
+      'and yes/no questions (yours plus .gitguard.yml) answered by TypeSafe System One. Returns PASS/WARN/REVIEW/BLOCK, ' +
+      'canCommit and findings with IDs for verify. Executes trusted repository commands which may write files.',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
-  verify_findings: {
-    description: 'Recheck finding IDs in this repository. Known IDs run project checks and fresh online TypeSafe evaluation and update finding state; unknown IDs return BLOCK before checks or online calls.',
+  verify: {
+    description: 'Recheck finding IDs from an earlier check after fixing them. Re-runs the gate and re-asks the questions ' +
+      'that produced those findings; unknown IDs return BLOCK before any command or API call.',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
 };
@@ -78,42 +89,13 @@ export interface McpToolResult extends CallToolResult {
   content: TextContent[];
 }
 
-interface ToolParameters {
-  task?: string;
-  scope?: ChangeScope;
-  target?: string;
-  cwd?: string;
-  repoPath?: string;
-  findingIds?: string[];
-}
-
-function normalizeIds(value: unknown): unknown {
-  const ids = typeof value === 'string' ? value.split(',') : value;
-  return Array.isArray(ids)
-    ? [...new Set(ids.map((id) => typeof id === 'string' ? id.trim() : id))]
-    : ids;
-}
-
 function parseArguments(name: ToolName, args: unknown): ToolParameters {
   if (args !== undefined && (!args || typeof args !== 'object' || Array.isArray(args))) {
     throw new Error('Tool arguments must be an object.');
   }
   const input: Record<string, unknown> = { ...(args as Record<string, unknown> | undefined) };
-  if (name === 'check_task_completion' && (typeof input.task !== 'string' || !input.task.trim())) {
-    throw new Error("Missing required parameter 'task' for check_task_completion");
-  }
-  if (name === 'verify_findings') {
-    const canonical = normalizeIds(input.findingIds);
-    const alias = normalizeIds(input.findings);
-    if (canonical !== undefined && canonical !== null && alias !== undefined &&
-        JSON.stringify(canonical) !== JSON.stringify(alias)) {
-      throw new Error("Conflicting 'findingIds' and legacy 'findings' parameters.");
-    }
-    input.findingIds = canonical ?? alias;
-    delete input.findings;
-    if (input.findingIds == null || (Array.isArray(input.findingIds) && input.findingIds.length === 0)) {
-      throw new Error("Missing or empty required parameter 'findingIds' for verify_findings");
-    }
+  if (name === 'verify' && Array.isArray(input.findingIds)) {
+    input.findingIds = [...new Set(input.findingIds.map((id) => typeof id === 'string' ? id.trim() : id))];
   }
   const parsed = INPUT_SCHEMAS[name].safeParse(input);
   if (!parsed.success) {
@@ -121,19 +103,12 @@ function parseArguments(name: ToolName, args: unknown): ToolParameters {
       (issue.path.join('.') || 'arguments') + ': ' + issue.message
     ).join('; '));
   }
-  const params: ToolParameters = parsed.data;
-  if (params.cwd && params.repoPath) {
-    const normalizePath = (value: string) => {
-      const resolved = path.resolve(value);
-      return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-    };
-    if (normalizePath(params.cwd) !== normalizePath(params.repoPath)) {
-      throw new Error("Conflicting 'cwd' and 'repoPath'; supply one repository path.");
-    }
+  const params = parsed.data as ToolParameters;
+  if (!path.isAbsolute(params.cwd)) {
+    throw new Error('cwd must be an absolute path to the repository.');
   }
-  params.cwd = params.repoPath ?? params.cwd;
   const inferredScope = params.target?.includes('..') ? 'range' : 'commit';
-  params.scope ??= params.target ? inferredScope : name === 'check_before_commit' ? 'staged' : 'all';
+  params.scope ??= params.target ? inferredScope : 'all';
   if (params.scope === 'commit' || params.scope === 'range') {
     if (!params.target) throw new Error("Scope '" + params.scope + "' requires a target.");
   }
@@ -169,23 +144,26 @@ function toolError(code: string, message: string): McpToolResult {
     content: [{ type: 'text', text: safeMessage }] };
 }
 
-function assertOnlineDecisions(decisions: Record<string, SemanticDecision>): void {
-  const values = Object.values(decisions || {});
-  if (values.length === 0 || values.some((decision) =>
-    decision.provider !== 'typesafe' || decision.metadata?.effectiveProvider !== 'typesafe' || decision.metadata.fallback
-  )) {
-    throw new Error('TypeSafe online evaluation is required; GitGuard MCP rejects local mock and fallback results.');
-  }
+function summarizeFinding(finding: Finding) {
+  const question = finding.metadata?.question as { question?: string; source?: string } | undefined;
+  return {
+    id: finding.id,
+    ruleId: finding.ruleId,
+    status: finding.status,
+    source: finding.source,
+    message: finding.message,
+    affectedFiles: finding.affectedFiles,
+    expectedEvidence: finding.expectedEvidence,
+    ...(question ? { question: question.question, questionSource: question.source } : {}),
+  };
 }
 
-function semanticSummary(decisions: Record<string, SemanticDecision>) {
-  const first = Object.values(decisions)[0];
-  return {
-    requestedProvider: first?.metadata?.requestedProvider ?? 'typesafe',
-    effectiveProvider: first?.metadata?.effectiveProvider ?? first?.provider,
-    fallback: first?.metadata?.fallback ?? false,
-    model: first?.metadata?.effectiveModel ?? null,
-  };
+function summarizeAnswers(decisions: Record<string, SemanticDecision>) {
+  return Object.values(decisions).map((decision) => ({
+    id: decision.id,
+    probability: decision.probability,
+    rationale: decision.rationale,
+  }));
 }
 
 /** Invalid arguments never reach repository commands or online providers. */
@@ -198,66 +176,30 @@ export async function executeMcpTool(name: string, args: unknown, engine: GitGua
     return toolError('INVALID_ARGUMENTS', 'Invalid arguments for ' + name + ': ' + (error instanceof Error ? error.message : String(error)));
   }
   try {
-    switch (name) {
-      case 'inspect_changes': {
-        const result = await engine.inspect({ scope: params.scope, target: params.target, task: params.task, cwd: params.cwd });
-        return toolResult({
-          status: result.status, verdict: result.status, scope: params.scope, summary: result.summary,
-          files: result.changedFiles.map((file) => ({ path: file.path || file.oldPath, status: file.status, insertions: file.additions, deletions: file.deletions })),
-          findings: result.findings, hasDeterministicFailures: result.hasDeterministicFailures,
-        });
-      }
-      case 'check_task_completion': {
-        const result = await engine.check({
-          task: params.task, scope: params.scope, target: params.target, cwd: params.cwd,
-          checkDeterministic: false, taskOnly: true, onlineOnly: true, noCache: true,
-        });
-        assertOnlineDecisions(result.semanticDecisions);
-        const taskCompleted = result.semanticDecisions.task_completed?.probability;
-        const taskScopeMatch = result.semanticDecisions.task_scope_match?.probability;
-        const unrelatedChanges = result.semanticDecisions.unrelated_changes?.probability;
-        if ([taskCompleted, taskScopeMatch, unrelatedChanges].some((value) =>
-          typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1
-        )) throw new Error('TypeSafe response is missing a required task-completion probability or it is outside [0, 1].');
-        return toolResult({
-          status: result.status, verdict: result.status, taskCompleted, taskScopeMatch, unrelatedChanges,
-          semantic: semanticSummary(result.semanticDecisions), findings: result.findings, summary: result.verdictSummary,
-          diffSummary: result.diffSummary, metadata: result.metadata,
-        });
-      }
-      case 'check_before_commit': {
-        const result = await engine.check({
-          task: params.task, scope: params.scope, cwd: params.cwd, onlineOnly: true, noCache: true,
-        });
-        assertOnlineDecisions(result.semanticDecisions);
-        return toolResult({
-          status: result.status, verdict: result.status, canCommit: result.status !== 'BLOCK' && result.exitCode === 0,
-          deterministic: Object.fromEntries((result.deterministicResults || []).map((check) => [check.id, check.status])),
-          semantic: semanticSummary(result.semanticDecisions), findings: result.findings, summary: result.verdictSummary,
-          diffSummary: result.diffSummary, metadata: result.metadata,
-        });
-      }
-      case 'verify_findings': {
-        const report = await engine.verify({
-          findingIds: params.findingIds, task: params.task, scope: params.scope, target: params.target, cwd: params.cwd,
-          onlineOnly: true, noCache: true,
-        });
-        if (!report.unknownFindings?.length) assertOnlineDecisions(report.semanticDecisions);
-        const resolved = report.resolved || report.resolvedFindings || [];
-        const remaining = report.remaining || report.remainingFindings || [];
-        const unknownFindings = report.unknownFindings || [];
-        const newFindings = report.newFindings || [];
-        const targetsResolved = report.targetsResolved ?? (report.status === 'PASS' && remaining.length === 0 && unknownFindings.length === 0);
-        const allResolved = report.allResolved ?? (targetsResolved && newFindings.length === 0);
-        return toolResult({
-          status: report.status, verdict: report.status, targetsResolved, allResolved, resolved, remaining, unknownFindings,
-          newFindings: newFindings.map((finding) => ({ id: finding.id, ruleId: finding.ruleId, status: finding.status, severity: finding.severity, message: finding.message })),
-          summary: report.verdictSummary, diffSummary: report.diffSummary, metadata: report.metadata,
-        });
-      }
-      default:
-        return toolError('UNKNOWN_TOOL', 'Unknown tool name: "' + name + '"');
+    if (name === 'check') {
+      const result = await engine.check({
+        cwd: params.cwd, scope: params.scope as ChangeScope | undefined, target: params.target, task: params.task, questions: params.questions,
+      });
+      return toolResult({
+        status: result.status, canCommit: result.canCommit, summary: result.verdictSummary,
+        deterministic: Object.fromEntries((result.deterministicResults || []).map((check) => [check.id, check.status])),
+        answers: summarizeAnswers(result.semanticDecisions),
+        findings: result.findings.map(summarizeFinding),
+        diffSummary: result.diffSummary, metadata: result.metadata,
+      });
     }
+    const report = await engine.verify({
+      cwd: params.cwd, findingIds: params.findingIds, scope: params.scope as ChangeScope | undefined, target: params.target, task: params.task,
+    });
+    const newFindings = report.newFindings || [];
+    return toolResult({
+      status: report.status, summary: report.verdictSummary,
+      targetsResolved: report.targetsResolved ?? false, allResolved: report.allResolved ?? false,
+      resolved: report.resolved || [], remaining: report.remaining || [], unknownFindings: report.unknownFindings || [],
+      newFindings: newFindings.map(summarizeFinding),
+      answers: summarizeAnswers(report.semanticDecisions),
+      diffSummary: report.diffSummary, metadata: report.metadata,
+    });
   } catch (error: unknown) {
     return toolError('TOOL_EXECUTION_FAILED', 'Tool execution failed (' + name + '): ' + (error instanceof Error ? error.message : String(error)));
   }

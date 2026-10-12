@@ -18,7 +18,7 @@ import type { GitGuardEngine } from '../../types/engine.js';
 import { DefaultGitGuardEngine } from '../../core/engine.js';
 import { GITGUARD_VERSION } from '../../version.js';
 import { redactSecrets } from '../../context/filter.js';
-import { GITGUARD_MCP_TOOLS, executeMcpTool } from './tools.js';
+import { GITGUARD_MCP_TOOLS, GITGUARD_SERVER_INSTRUCTIONS, executeMcpTool } from './tools.js';
 
 /**
  * Diagnostic logger for the MCP server that strictly directs output to stderr
@@ -58,6 +58,7 @@ export class GitGuardMcpServer {
         capabilities: {
           tools: {},
         },
+        instructions: GITGUARD_SERVER_INSTRUCTIONS,
       }
     );
 

@@ -1,0 +1,18 @@
+{
+  "name": "gitguard",
+  "version": "0.3.0",
+  "description": "Pre-commit gate for agents: secret scan, repository test/lint/typecheck commands, and task-specific yes/no questions answered by TypeSafe System One.",
+  "author": {
+    "name": "刘新涛"
+  },
+  "homepage": "https://github.com/2061863797/GitGuard",
+  "repository": "https://github.com/2061863797/GitGuard",
+  "license": "Apache-2.0",
+  "keywords": ["git", "pre-commit", "quality-gate", "code-review", "mcp"],
+  "mcpServers": {
+    "gitguard": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/gitguard-mcp.mjs"]
+    }
+  }
+}

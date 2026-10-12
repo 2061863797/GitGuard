@@ -28,7 +28,8 @@ Thumbs.db
 .idea/
 
 # Agent & Local Tools
-.agents/
+.agents/*
+!.agents/plugins/
 .codegraph/
 ORIGINAL_REQUEST.md
 TEST_READY.md

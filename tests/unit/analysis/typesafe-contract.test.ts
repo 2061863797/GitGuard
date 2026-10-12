@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { TypeSafeSystemOneProvider } from '../../../src/analysis/semantic/typesafe-provider.js';
-import { STANDARD_QUESTIONS_MAP } from '../../../src/analysis/semantic/questions.js';
+import type { SemanticQuestion } from '../../../src/types/provider.js';
+import { ProviderError } from '../../../src/types/errors.js';
 import { DefaultContextBuilder } from '../../../src/context/builder.js';
 import type { EvaluationContext } from '../../../src/types/context.js';
 import type { GitAdapter, GitStatusResult } from '../../../src/types/git.js';
@@ -14,6 +15,11 @@ import { FileFindingStore } from '../../../src/findings/store.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+
+const QUESTIONS = {
+  task_completed: { id: 'task_completed', prompt: 'Does this change fail to fulfil the task description?' },
+  unrelated_changes: { id: 'unrelated_changes', prompt: 'Does this diff contain changes unrelated to the task?' },
+} satisfies Record<string, SemanticQuestion>;
 
 function createDummyContext(diffText = 'diff --git a/src/index.ts b/src/index.ts\n+console.log("hello");'): EvaluationContext {
   return {
@@ -89,8 +95,8 @@ describe('TypeSafe System One Official API Contract', () => {
 
     const context = createDummyContext();
     const questions = [
-      STANDARD_QUESTIONS_MAP.task_completed,
-      STANDARD_QUESTIONS_MAP.unrelated_changes,
+      QUESTIONS.task_completed,
+      QUESTIONS.unrelated_changes,
     ];
 
     const decisions = await provider.evaluate(context, questions);
@@ -136,23 +142,20 @@ describe('TypeSafe System One Official API Contract', () => {
     });
 
     const report = await provider.evaluateWithReport(createDummyContext(), [
-      STANDARD_QUESTIONS_MAP.task_completed,
+      QUESTIONS.task_completed,
     ]);
 
-    expect(report.metadata.fallback).toBe(false);
-    expect(report.metadata.requestedProvider).toBe('typesafe');
-    expect(report.metadata.effectiveProvider).toBe('typesafe');
+    expect(report.metadata.provider).toBe('typesafe');
+    expect(report.metadata.requestedModel).toBe('jev-latest');
     expect(report.metadata.effectiveModel).toBe('jev-2.5');
     expect(report.decisions[0].probability).toBe(0.88);
   });
 
-  it('rejects incomplete or invalid HTTP 200 answers in strict mode', async () => {
+  it('rejects incomplete or invalid HTTP 200 answers', async () => {
     const cases = [
-      { question: STANDARD_QUESTIONS_MAP.task_completed, answer: {}, reason: 'probability' },
-      { question: STANDARD_QUESTIONS_MAP.task_completed, answer: { noul: 1.2 }, reason: 'probability' },
-      { question: STANDARD_QUESTIONS_MAP.task_completed, answer: { noul: Number.NaN }, reason: 'probability' },
-      { question: STANDARD_QUESTIONS_MAP.change_type, answer: { choice: 'not-a-category' }, reason: 'unknown choice' },
-      { question: STANDARD_QUESTIONS_MAP.regression_risk, answer: { score: 9 }, reason: 'score' },
+      { question: QUESTIONS.task_completed, answer: {}, reason: 'probability' },
+      { question: QUESTIONS.task_completed, answer: { noul: 1.2 }, reason: 'probability' },
+      { question: QUESTIONS.task_completed, answer: { noul: Number.NaN }, reason: 'probability' },
     ];
     for (const { question, answer, reason } of cases) {
       const mockFetch = vi.fn().mockResolvedValue({
@@ -160,7 +163,7 @@ describe('TypeSafe System One Official API Contract', () => {
         json: async () => ({ answers: { [question.id]: answer } }),
       });
       const provider = new TypeSafeSystemOneProvider({
-        apiKey: 'test', strict: true, fetchFn: mockFetch as unknown as typeof fetch,
+        apiKey: 'test', fetchFn: mockFetch as unknown as typeof fetch,
       });
       await expect(provider.evaluate(createDummyContext(), [question])).rejects.toThrow(reason);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -205,14 +208,14 @@ describe('TypeSafe System One Official API Contract', () => {
     });
 
     const decisions = await provider.evaluate(createDummyContext(), [
-      STANDARD_QUESTIONS_MAP.task_completed,
+      QUESTIONS.task_completed,
     ]);
 
     expect(callCount).toBe(2);
     expect(decisions[0].probability).toBe(0.92);
   });
 
-  it('marks fallback=true and exposes fallbackReason when external provider fails', async () => {
+  it('throws ProviderError instead of falling back when the provider keeps failing', async () => {
     const failingFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
@@ -222,18 +225,39 @@ describe('TypeSafe System One Official API Contract', () => {
 
     const provider = new TypeSafeSystemOneProvider({
       apiKey: 'test-key',
+      retryBackoffMs: 1,
       fetchFn: failingFetch as unknown as typeof fetch,
-      strict: false,
     });
 
-    const report = await provider.evaluateWithReport(createDummyContext(), [
-      STANDARD_QUESTIONS_MAP.task_completed,
-    ]);
+    await expect(provider.evaluateWithReport(createDummyContext(), [QUESTIONS.task_completed]))
+      .rejects.toThrow(ProviderError);
+    await expect(provider.evaluate(createDummyContext(), [QUESTIONS.task_completed]))
+      .rejects.toThrow(/HTTP 500/);
+  });
 
-    expect(report.metadata.fallback).toBe(true);
-    expect(report.metadata.effectiveProvider).toBe('mock');
-    expect(report.metadata.fallbackReason).toContain('500');
-    expect(report.decisions[0].provider).toBe('mock');
+  it('throws ProviderError naming TYPESAFE_API_KEY when no key is configured', async () => {
+    const fetchFn = vi.fn();
+    const provider = new TypeSafeSystemOneProvider({ apiKey: '', fetchFn: fetchFn as unknown as typeof fetch });
+    await expect(provider.evaluate(createDummyContext(), [QUESTIONS.task_completed])).rejects.toThrow(/TYPESAFE_API_KEY/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('sends every question as a noul primitive with its prompt', async () => {
+    let body: any;
+    const fetchFn = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      body = JSON.parse(init.body as string);
+      return { ok: true, status: 200, json: async () => ({ answers: { a_q: { noul: 0.1 }, b_q: { probability: 0.7 } } }) };
+    });
+    const provider = new TypeSafeSystemOneProvider({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
+    const decisions = await provider.evaluate(createDummyContext(), [
+      { id: 'a_q', prompt: 'Is A wrong?' },
+      { id: 'b_q', prompt: 'Is B wrong?' },
+    ]);
+    expect(body.questions).toEqual({
+      a_q: { type: 'noul', instructions: 'Is A wrong?' },
+      b_q: { type: 'noul', instructions: 'Is B wrong?' },
+    });
+    expect(decisions.map((d) => [d.id, d.probability])).toEqual([['a_q', 0.1], ['b_q', 0.7]]);
   });
 
   it('retries on network transient error (fetch exception) and succeeds on retry', async () => {
@@ -269,7 +293,7 @@ describe('TypeSafe System One Official API Contract', () => {
     });
 
     const decisions = await provider.evaluate(createDummyContext(), [
-      STANDARD_QUESTIONS_MAP.task_completed,
+      QUESTIONS.task_completed,
     ]);
 
     expect(callCount).toBe(2);
@@ -318,7 +342,7 @@ describe('TypeSafe System One Official API Contract', () => {
 
     const startTime = Date.now();
     const decisions = await provider.evaluate(createDummyContext(), [
-      STANDARD_QUESTIONS_MAP.task_completed,
+      QUESTIONS.task_completed,
     ]);
     const elapsed = Date.now() - startTime;
 
@@ -474,40 +498,6 @@ describe('v0.2.1 Core Correctness Hotfixes Regression Suite', () => {
         process.env.TYPESAFE_API_KEY = oldEnv;
       }
     }
-  });
-
-  it('maps rawScore 1.05 to normalized score and categorical low without false critical block', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        model: 'jev-latest',
-        answers: {
-          regression_risk: {
-            type: 'score',
-            score: 1.05,
-            confidence: 0.95,
-            rationale: 'Low blast radius with localized modifications.',
-          },
-        },
-      }),
-    });
-
-    const provider = new TypeSafeSystemOneProvider({
-      apiKey: 'test-key',
-      fetchFn: mockFetch as unknown as typeof fetch,
-    });
-
-    const context = createDummyContext();
-    const decisions = await provider.evaluate(context, [STANDARD_QUESTIONS_MAP.regression_risk]);
-
-    expect(decisions).toHaveLength(1);
-    const d = decisions[0];
-    expect(d.rawScore).toBe(1.05);
-    // Normalized score in 0..1 scale (1.05 / 4 = 0.2625)
-    expect(d.score).toBeCloseTo(0.2625, 4);
-    // Nearest categorical level mapped to 'low'
-    expect(d.value).toBe('low');
   });
 
   it('preserves complete unbudgeted diff in rawContext for secret scanning (>50KB)', async () => {

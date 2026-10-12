@@ -144,23 +144,27 @@ describe('DefaultFindingManager', () => {
       expect(findings[0].fingerprint).toHaveLength(64);
     });
 
-    it('should attach metadata such as score if present on match', () => {
+    it('should attach the originating question as metadata', () => {
+      const question = {
+        id: 'missing_rollback', question: 'Does this migration lack a rollback?', level: 'review' as const, source: 'agent' as const,
+      };
       const ruleMatches: RuleMatch[] = [
         {
-          ruleId: 'regression_risk',
+          ruleId: 'missing_rollback',
           source: 'semantic',
-          status: 'warn',
-          severity: 'WARN',
-          message: 'Moderate regression risk',
-          score: 'medium',
+          status: 'review',
+          severity: 'ERROR',
+          message: 'Does this migration lack a rollback?',
+          probability: 0.9,
           affectedFiles: ['src/auth.ts'],
           evidence: [],
           expectedEvidence: [],
+          question,
         },
       ];
 
       const findings = manager.createFindings(ruleMatches, mockContext);
-      expect(findings[0].metadata).toEqual({ score: 'medium' });
+      expect(findings[0].metadata).toEqual({ question });
     });
   });
 
@@ -490,21 +494,10 @@ describe('DefaultFindingManager', () => {
       expect(getDefaultExpectedEvidence('deterministic.secret_scan', 'block')).toContain(
         'Remove sensitive credentials, tokens, or private keys from the diff.'
       );
-      expect(getDefaultExpectedEvidence('task_completed', 'review')).toContain(
-        'Implement the missing requirements declared in the task specification.'
-      );
-      expect(getDefaultExpectedEvidence('unrelated_changes', 'warn')).toContain(
-        'Remove or isolate changes that are not directly relevant to the assigned task.'
-      );
-      expect(getDefaultExpectedEvidence('tests_required', 'review')).toContain(
-        'Add automated unit or integration tests that exercise the newly added or modified logic.'
-      );
-      expect(getDefaultExpectedEvidence('security_sensitive', 'review')).toContain(
-        'Perform a security review on authentication, cryptography, or permission modifications.'
-      );
-      expect(getDefaultExpectedEvidence('regression_risk', 'warn')).toContain(
-        'Provide regression tests verifying backward compatibility.'
-      );
+      expect(getDefaultExpectedEvidence('missing_rollback', 'review')).toEqual([
+        "Remediate the policy violation identified by rule 'missing_rollback'.",
+        'Ensure the gate status criteria (REVIEW) are satisfied.',
+      ]);
       expect(getDefaultExpectedEvidence('custom_generic_rule', 'review')).toContain(
         "Remediate the policy violation identified by rule 'custom_generic_rule'."
       );

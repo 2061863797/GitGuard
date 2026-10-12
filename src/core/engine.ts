@@ -1,22 +1,20 @@
 /**
  * src/core/engine.ts
  * DefaultGitGuardEngine implementing the central GitGuardEngine contract.
- * Coordinates Git context, deterministic status checkers, System One semantic evaluators,
- * policy engine rules, and structured finding lifecycle management.
+ * Coordinates Git context, deterministic status checkers, agent/config questions answered by
+ * System One, policy evaluation, and structured finding lifecycle management.
  */
 
-import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import type {
+  AgentQuestion,
   GitGuardEngine,
-  InspectOptions,
-  InspectResult,
   CheckOptions,
   CheckResult,
   VerifyOptions,
 } from '../types/engine.js';
 import type { Finding, FindingFilter, VerificationReport } from '../types/finding.js';
-import type { PolicyConfig, DeterministicPolicyConfig, GateVerdict } from '../types/policy.js';
+import type { PolicyConfig, DeterministicPolicyConfig, QuestionSpec } from '../types/policy.js';
 import type {
   DecisionProvider,
   DeterministicConfig,
@@ -25,21 +23,18 @@ import type {
   SemanticQuestion,
 } from '../types/provider.js';
 import type { GitAdapter, DiffOptions } from '../types/git.js';
-import type { DiffSummary } from '../types/diff.js';
 import type { ContextBuilder } from '../types/context.js';
 import type { PolicyEngine } from '../types/policy.js';
 import type { FindingManager } from '../types/finding.js';
 import { GitCLIAdapter } from '../git/adapter.js';
-import { parseDiff } from '../git/diff-parser.js';
 import { DefaultContextBuilder } from '../context/builder.js';
 import { DeterministicRunner } from '../analysis/deterministic/runner.js';
-import { DeterministicMockProvider } from '../analysis/semantic/mock-provider.js';
 import { TypeSafeSystemOneProvider } from '../analysis/semantic/typesafe-provider.js';
-import { STANDARD_QUESTIONS_MAP } from '../analysis/semantic/questions.js';
 import { DefaultPolicyEngine } from '../policy/engine.js';
+import { questionAppliesTo } from '../policy/rules.js';
 import { DefaultFindingManager } from '../findings/manager.js';
 import { FileFindingStore } from '../findings/store.js';
-import { loadConfig } from '../policy/config.js';
+import { loadConfig, validateQuestion } from '../policy/config.js';
 import {
   NotAGitRepositoryError,
   ConfigurationError,
@@ -47,7 +42,6 @@ import {
   SecurityViolationError,
   InvalidGitRefError,
 } from '../types/errors.js';
-import { SemanticCache } from '../cache/semantic-cache.js';
 import { scanContentForSecrets, SECRET_PATTERNS, validateCustomSecretPattern, type SecretPattern } from '../analysis/deterministic/secrets.js';
 
 function normalizeRepositoryRoot(root: string): string {
@@ -56,16 +50,55 @@ function normalizeRepositoryRoot(root: string): string {
 }
 
 /**
+ * Maximum number of agent-supplied questions per check.
+ */
+export const MAX_AGENT_QUESTIONS = 10;
+
+/**
  * Dependency injection options for DefaultGitGuardEngine.
  */
 export interface GitGuardEngineDependencies {
   gitAdapter?: GitAdapter;
   contextBuilder?: ContextBuilder;
   deterministicRunner?: DeterministicRunner;
-  mockProvider?: DecisionProvider;
+  /** Semantic provider; a stub replaces the live TypeSafe client in tests */
   typesafeProvider?: DecisionProvider;
   policyEngine?: PolicyEngine;
   findingManager?: FindingManager;
+}
+
+/**
+ * Validates agent questions and combines them with config questions.
+ * Previously asked agent questions (verify) are appended when their id is not taken.
+ */
+export function mergeQuestions(
+  configQuestions: QuestionSpec[] = [],
+  agentQuestions: AgentQuestion[] = [],
+  storedQuestions: QuestionSpec[] = []
+): QuestionSpec[] {
+  if (agentQuestions.length > MAX_AGENT_QUESTIONS) {
+    throw new ConfigurationError(`At most ${MAX_AGENT_QUESTIONS} questions can be supplied per check.`);
+  }
+  const merged: QuestionSpec[] = configQuestions.map((q) => ({ ...q, source: 'config' as const }));
+  const ids = new Set(merged.map((q) => q.id));
+  agentQuestions.forEach((question, i) => {
+    const errors = validateQuestion(question, `questions[${i}]`);
+    if (errors.length > 0) {
+      throw new ConfigurationError(`Invalid question: ${errors.join('; ')}`);
+    }
+    if (ids.has(question.id)) {
+      throw new ConfigurationError(`Question id '${question.id}' is already used by .gitguard.yml or another question.`);
+    }
+    ids.add(question.id);
+    merged.push({ ...question, source: 'agent' });
+  });
+  for (const question of storedQuestions) {
+    if (question.source === 'agent' && !ids.has(question.id)) {
+      ids.add(question.id);
+      merged.push(question);
+    }
+  }
+  return merged;
 }
 
 /**
@@ -162,7 +195,6 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
   public readonly gitAdapter: GitAdapter;
   public readonly contextBuilder: ContextBuilder;
   public readonly deterministicRunner: DeterministicRunner;
-  public readonly mockProvider: DecisionProvider;
   public readonly typesafeProvider: DecisionProvider;
   public readonly policyEngine: PolicyEngine;
   public readonly findingManager: FindingManager;
@@ -171,127 +203,52 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     this.gitAdapter = deps?.gitAdapter ?? new GitCLIAdapter();
     this.contextBuilder = deps?.contextBuilder ?? new DefaultContextBuilder(this.gitAdapter);
     this.deterministicRunner = deps?.deterministicRunner ?? new DeterministicRunner();
-    this.mockProvider = deps?.mockProvider ?? new DeterministicMockProvider();
     this.typesafeProvider = deps?.typesafeProvider ?? new TypeSafeSystemOneProvider();
     this.findingManager = deps?.findingManager ?? new DefaultFindingManager();
     this.policyEngine = deps?.policyEngine ?? new DefaultPolicyEngine(this.findingManager);
   }
 
-  /**
-   * Resolves effective PolicyConfig using programmatic override, path, or zero-config defaults.
-   */
-  private async resolveConfig(
-    cwd: string,
-    optionsConfig?: PolicyConfig,
-    configPath?: string,
-    allowCustomProvider = false
-  ): Promise<PolicyConfig> {
-    if (optionsConfig) {
-      return optionsConfig;
-    }
-    return await loadConfig(configPath, cwd, allowCustomProvider);
+  private async resolveConfig(cwd: string, optionsConfig?: PolicyConfig, configPath?: string): Promise<PolicyConfig> {
+    return optionsConfig ?? (await loadConfig(configPath, cwd));
   }
 
   /**
-   * Rapidly inspects repository changes without executing full semantic evaluation suites.
+   * Builds the live TypeSafe client from configuration, or returns the injected provider.
    */
-  public async inspect(options: InspectOptions = {}): Promise<InspectResult> {
-    const cwd = options.cwd ?? process.cwd();
-
-    const isGit = await this.gitAdapter.isGitRepository(cwd);
-    if (!isGit) {
-      throw new NotAGitRepositoryError(cwd);
+  private resolveProvider(config: PolicyConfig): DecisionProvider {
+    if (!(this.typesafeProvider instanceof TypeSafeSystemOneProvider)) {
+      return this.typesafeProvider;
     }
-
-    const config = await this.resolveConfig(cwd, options.config, options.configPath);
-    const scope = options.scope ?? (options.target ? options.target.includes('..') ? 'range' : 'commit' : 'all');
-    const diffOpts = buildDiffOptions(options.target, cwd);
-
-    const rawDiff = await this.gitAdapter.getDiff(scope, diffOpts);
-    const parsedDiff = parseDiff(rawDiff);
-    const changedFiles = await this.gitAdapter.getChangedFiles(scope, diffOpts);
-
-    const maxDiffChars = config.context?.max_diff_chars ?? 50000;
-    const isTruncated = parsedDiff.truncated || rawDiff.length > maxDiffChars;
-
-    const summary: DiffSummary = {
-      filesChanged: changedFiles.length,
-      insertions: parsedDiff.insertions,
-      deletions: parsedDiff.deletions,
-      hasBinaryChanges: changedFiles.some((f) => f.binary),
-      truncated: isTruncated,
-    };
-
-    let hasDeterministicFailures = false;
-    let findings: Finding[] = [];
-    let status: GateVerdict = 'PASS';
-
-    // Preliminary deterministic check if requested
-    if (options.checkDeterministic) {
-      const taskStr =
-        typeof options.task === 'string'
-          ? options.task
-          : options.task?.task;
-
-      const buildOptions = {
-        scope,
-        diffOptions: diffOpts,
-        cwd,
-        task: taskStr,
-        budget: {
-          maxDiffChars: config.context?.max_diff_chars,
-          maxTotalChars: config.context?.max_total_chars,
-          surroundingLines: config.context?.surrounding_lines,
-        },
-        policyConfigPath: options.configPath,
-      };
-
-      const { rawContext, semanticContext } = this.contextBuilder.buildDualContext
-        ? await this.contextBuilder.buildDualContext(buildOptions)
-        : {
-            rawContext: await this.contextBuilder.buildContext(buildOptions),
-            semanticContext: await this.contextBuilder.buildContext(buildOptions),
-          };
-
-      const isClean =
-        changedFiles.length === 0 && (!parsedDiff.raw || parsedDiff.raw.trim().length === 0);
-
-      const detResults = isClean
-        ? [
-            {
-              id: 'secret_scan' as const,
-              status: 'passed' as const,
-              exitCode: 0,
-              durationMs: 0,
-              summary: 'Clean changeset with zero modifications',
-              violations: [],
-            },
-          ]
-        : await this.deterministicRunner.run(
-            rawContext,
-            toDeterministicRunnerConfig(config.deterministic)
-          );
-
-      hasDeterministicFailures = detResults.some((r) => r.status === 'failed');
-      const evalResult = this.policyEngine.evaluate(detResults, [], config, semanticContext);
-      status = evalResult.verdict;
-      findings = evalResult.findings;
+    const configuredBaseUrl = config.system_one?.baseUrl?.trim();
+    if (configuredBaseUrl) {
+      let parsed: URL;
+      try {
+        parsed = new URL(configuredBaseUrl);
+      } catch {
+        throw new ConfigurationError(`Invalid system_one.baseUrl format: ${configuredBaseUrl}`);
+      }
+      if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'api.typesafe.ai') {
+        throw new SecurityViolationError(
+          `system_one.baseUrl [${configuredBaseUrl}] must be the official TypeSafe endpoint; use TYPESAFE_BASE_URL for other endpoints.`
+        );
+      }
     }
-
-    return {
-      status,
-      summary,
-      changedFiles,
-      findings,
-      hasDeterministicFailures,
-      preliminaryFindings: findings,
-    };
+    return new TypeSafeSystemOneProvider({
+      apiKey: process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || undefined,
+      baseUrl: configuredBaseUrl,
+      model: config.system_one?.model || 'jev-latest',
+      timeoutMs: config.system_one?.timeout_ms,
+    });
   }
 
   /**
-   * Executes the full verification gate (deterministic + semantic + policy evaluation).
+   * Executes the gate: deterministic checks plus agent and config questions.
    */
   public async check(options: CheckOptions = {}): Promise<CheckResult> {
+    return this.runCheck(options, []);
+  }
+
+  private async runCheck(options: CheckOptions, storedQuestions: QuestionSpec[]): Promise<CheckResult> {
     const startTime = Date.now();
     const cwd = options.cwd ?? process.cwd();
 
@@ -300,22 +257,13 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       throw new NotAGitRepositoryError(cwd);
     }
 
-    const config = await this.resolveConfig(cwd, options.config, options.configPath, options.allowCustomProvider);
-    let scope = options.scope;
-    if (!scope) {
-      if (options.target) {
-        scope = options.target.includes('..') ? 'range' : 'commit';
-      } else {
-        scope = 'all';
-      }
-    }
+    const config = await this.resolveConfig(cwd, options.config, options.configPath);
+    const questions = mergeQuestions(config.questions, options.questions, storedQuestions);
+    const scope = options.scope ?? (options.target ? (options.target.includes('..') ? 'range' : 'commit') : 'all');
     const diffOpts = buildDiffOptions(options.target, cwd);
-    const taskStr =
-      typeof options.task === 'string'
-        ? options.task
-        : options.task?.task;
+    const taskStr = typeof options.task === 'string' ? options.task : options.task?.task;
 
-    // 1. Build dual evaluation context: rawContext for local tools, semanticContext for external AI
+    // 1. Dual context: rawContext for local tools, redacted semanticContext for System One
     const buildOptions = {
       scope,
       diffOptions: diffOpts,
@@ -344,11 +292,11 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         };
 
     const context = semanticContext;
-    const changedFiles = context.diff?.files || [];
+    const changedPaths = (context.diff?.files || []).map((f) => f.newPath || f.oldPath || '');
     const isCleanChangeset =
-      changedFiles.length === 0 && (!context.diff?.raw || context.diff.raw.trim().length === 0);
+      changedPaths.length === 0 && (!context.diff?.raw || context.diff.raw.trim().length === 0);
 
-    // 2. Execute deterministic checks against rawContext (ensures secrets in .env are caught locally)
+    // 2. Deterministic checks run against rawContext so secrets in excluded files are still caught locally
     let deterministicResults: DeterministicResult[];
     if (isCleanChangeset) {
       deterministicResults = [
@@ -361,33 +309,16 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
           violations: [],
         },
       ];
-      const detCfg = config.deterministic;
-      if (detCfg?.test?.enabled) {
-        deterministicResults.push({
-          id: 'test',
-          status: 'skipped',
-          durationMs: 0,
-          summary: 'Skipped test check: clean changeset with zero modifications',
-        });
+      for (const checkId of ['test', 'lint', 'typecheck'] as const) {
+        if (config.deterministic?.[checkId]?.enabled) {
+          deterministicResults.push({
+            id: checkId,
+            status: 'skipped',
+            durationMs: 0,
+            summary: `Skipped ${checkId}: clean changeset with zero modifications`,
+          });
+        }
       }
-      if (detCfg?.lint?.enabled) {
-        deterministicResults.push({
-          id: 'lint',
-          status: 'skipped',
-          durationMs: 0,
-          summary: 'Skipped lint check: clean changeset with zero modifications',
-        });
-      }
-      if (detCfg?.typecheck?.enabled) {
-        deterministicResults.push({
-          id: 'typecheck',
-          status: 'skipped',
-          durationMs: 0,
-          summary: 'Skipped typecheck: clean changeset with zero modifications',
-        });
-      }
-    } else if (options.checkDeterministic === false) {
-      deterministicResults = [];
     } else {
       deterministicResults = await this.deterministicRunner.run(
         rawContext,
@@ -395,297 +326,34 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       );
     }
 
-    // 3. Determine semantic provider with explicit configuration wiring
-    const requireOnline = options.onlineOnly === true || options.requireSemantic === true;
-    const isOffline =
-      options.offline ||
-      config.system_one?.provider === 'mock';
-    if (requireOnline && isOffline) {
-      throw new ProviderError(
-        options.onlineOnly
-          ? 'MCP semantic checks require TypeSafe; offline or mock mode is unavailable'
-          : 'Required online semantic checks cannot use offline or mock mode',
-        'typesafe'
-      );
-    }
-
-    let provider: DecisionProvider;
-    if (isOffline) {
-      provider = this.mockProvider;
-    } else if (this.typesafeProvider instanceof TypeSafeSystemOneProvider) {
-      const configuredKey = config.system_one?.apiKey?.trim();
-      const effectiveKey = configuredKey || process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY;
-      const configuredBaseUrl = config.system_one?.baseUrl?.trim();
-      if (configuredBaseUrl && !options.allowCustomProvider) {
-        let parsed: URL;
-        try {
-          parsed = new URL(configuredBaseUrl);
-        } catch {
-          throw new ConfigurationError(`Invalid system_one.baseUrl format: ${configuredBaseUrl}`);
-        }
-        if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'api.typesafe.ai') {
-          throw new SecurityViolationError(
-            `Custom system_one.baseUrl [${configuredBaseUrl}] requires explicit --allow-custom-provider permission.`
-          );
-        }
-      }
-      provider = new TypeSafeSystemOneProvider({
-        ...(effectiveKey ? { apiKey: effectiveKey } : {}),
-        baseUrl: config.system_one?.baseUrl,
-        model: config.system_one?.model || 'jev-latest',
-        timeoutMs: config.system_one?.timeout_ms,
-        strict: requireOnline,
-        fallbackProvider: this.mockProvider,
-      });
-    } else {
-      provider = this.typesafeProvider;
-    }
-    if (requireOnline && provider.name !== 'typesafe') {
-      throw new ProviderError(
-        options.onlineOnly ? 'MCP semantic checks require the TypeSafe provider' : 'Online semantic checks require the TypeSafe provider',
-        'typesafe'
-      );
-    }
-
-    // 4. Assemble semantic questions
-    const questions: SemanticQuestion[] = [];
-    const hasTask = context.task && context.task.task && context.task.task.trim().length > 0;
-
-    if (options.taskOnly) {
-      questions.push(
-        STANDARD_QUESTIONS_MAP.task_completed,
-        STANDARD_QUESTIONS_MAP.task_scope_match,
-        STANDARD_QUESTIONS_MAP.unrelated_changes
-      );
-    } else if (hasTask) {
-      questions.push(
-        STANDARD_QUESTIONS_MAP.task_completed,
-        STANDARD_QUESTIONS_MAP.task_scope_match,
-        STANDARD_QUESTIONS_MAP.unrelated_changes,
-        STANDARD_QUESTIONS_MAP.tests_required,
-        STANDARD_QUESTIONS_MAP.tests_present,
-        STANDARD_QUESTIONS_MAP.security_sensitive_change,
-        STANDARD_QUESTIONS_MAP.regression_risk
-      );
-    } else {
-      questions.push(
-        STANDARD_QUESTIONS_MAP.unrelated_changes,
-        STANDARD_QUESTIONS_MAP.tests_required,
-        STANDARD_QUESTIONS_MAP.tests_present,
-        STANDARD_QUESTIONS_MAP.security_sensitive_change,
-        STANDARD_QUESTIONS_MAP.regression_risk
-      );
-    }
-
-    // Include custom policy rules as questions (unless in task-only mode)
-    if (!options.taskOnly && config.custom_rules && Array.isArray(config.custom_rules)) {
-      for (const rule of config.custom_rules) {
-        if (rule.enabled !== false) {
-          questions.push({
-            id: rule.id,
-            type:
-              rule.primitive === 'score'
-                ? 'score'
-                : rule.primitive === 'choice'
-                ? 'choice'
-                : 'boolean',
-            prompt: rule.question,
-            choices: rule.candidates?.map((c) => ({ value: c })),
-            levels: rule.scoreLevels?.map((l, idx) => ({
-              name: l,
-              description: `Score level: ${l}`,
-              score: (idx + 1) / rule.scoreLevels!.length,
-            })),
-          });
-        }
-      }
-    }
-
-    // 5. Evaluate semantic questions with caching
-    const cacheEnabled = !options.noCache && !requireOnline && config.gate?.cache?.enabled !== false;
-    const cacheDirOverride = config.gate?.cache?.directory;
-    const cache = new SemanticCache(context.repository?.rootPath ?? cwd, cacheEnabled, cacheDirOverride);
-    const rawDiffText = context.diff?.raw || '';
-    const taskKey = context.task?.task || '';
-    const modelKey = config.system_one?.model || 'jev-latest';
-
-    const instructionsFp = crypto.createHash('sha256').update(JSON.stringify(context.instructions || [])).digest('hex').slice(0, 16);
-    const surroundingFp = crypto.createHash('sha256').update(JSON.stringify(context.files?.map((f) => f.spans) || [])).digest('hex').slice(0, 16);
-    const relatedTestsFp = crypto.createHash('sha256').update(JSON.stringify(context.relatedTests || [])).digest('hex').slice(0, 16);
-    const questionsFp = crypto.createHash('sha256').update(JSON.stringify(questions)).digest('hex').slice(0, 16);
-    const contextFp = `${surroundingFp}:${relatedTestsFp}`;
-
-    const cacheKey = cache.computeKey(rawDiffText, taskKey, modelKey, questions.map((q) => q.id), {
-      instructionsFingerprint: instructionsFp,
-      contextFingerprint: contextFp,
-      questionsFingerprint: questionsFp,
-      provider: provider.name,
-    });
-
+    // 3. Ask only the questions whose file filters match this changeset; no questions means no API call
+    const asked = isCleanChangeset ? [] : questions.filter((q) => questionAppliesTo(q, changedPaths));
     let semanticDecisions: SemanticDecision[] = [];
-    let cacheHit = false;
-
-    if (isCleanChangeset && !requireOnline) {
-      const taskPenalty = hasTask && !options.verifyMode;
-      semanticDecisions = [
-        {
-          id: 'task_completed',
-          probability: taskPenalty ? 0.0 : 1.0,
-          confidence: 1.0,
-          provider: provider.name,
-          rationale: taskPenalty
-            ? 'Clean changeset with zero modifications while a specific task was declared'
-            : 'Clean changeset with zero modifications',
-        },
-        {
-          id: 'task_scope_match',
-          probability: taskPenalty ? 0.0 : 1.0,
-          confidence: 1.0,
-          provider: provider.name,
-          rationale: taskPenalty
-            ? 'Clean changeset with zero modifications while a specific task was declared'
-            : 'Clean changeset with zero modifications',
-        },
-        {
-          id: 'unrelated_changes',
-          probability: 0.0,
-          confidence: 1.0,
-          provider: provider.name,
-          rationale: 'Clean changeset with zero modifications',
-        },
-        {
-          id: 'tests_required',
-          probability: 0.0,
-          confidence: 1.0,
-          provider: provider.name,
-          rationale: 'Clean changeset with zero modifications',
-        },
-        {
-          id: 'security_sensitive_change',
-          probability: 0.0,
-          confidence: 1.0,
-          provider: provider.name,
-          rationale: 'Clean changeset with zero modifications',
-        },
-        {
-          id: 'security_sensitive',
-          probability: 0.0,
-          confidence: 1.0,
-          provider: provider.name,
-          rationale: 'Clean changeset with zero modifications',
-        },
-        {
-          id: 'regression_risk',
-          value: 'negligible',
-          score: 0.0,
-          confidence: 1.0,
-          provider: provider.name,
-          rationale: 'Clean changeset with zero modifications',
-        },
-      ];
-    } else {
-      if (cacheEnabled && !isOffline) {
-        const cached = await cache.get(cacheKey, { provider: provider.name, model: modelKey });
-        if (cached && cached.length > 0) {
-          // If requireSemantic is enabled, ensure cached entry is genuine TypeSafe and not mock/fallback
-          const cachedIsMockOrFallback =
-            cached.some((d) => d.provider === 'mock' || d.metadata?.fallback === true);
-          if (!options.requireSemantic || !cachedIsMockOrFallback) {
-            semanticDecisions = cached;
-            cacheHit = true;
-          }
-        }
-      }
-
-      if (!cacheHit) {
-        if (typeof (provider as any).evaluateWithReport === 'function') {
-          const report = await (provider as any).evaluateWithReport(semanticContext, questions);
-          semanticDecisions = report.decisions;
-        } else {
-          semanticDecisions = await provider.evaluate(semanticContext, questions);
-        }
-
-        // Cache anti-pollution: strictly persist genuine live TypeSafe evaluations, never mock or fallback
-        const isFallback =
-          provider.name === 'mock' ||
-          semanticDecisions.some((d) => d.metadata?.fallback === true);
-        if (cacheEnabled && !isOffline && semanticDecisions.length > 0 && provider.name === 'typesafe' && !isFallback) {
-          await cache.set(cacheKey, provider.name, modelKey, semanticDecisions);
-        }
+    if (asked.length > 0) {
+      const provider = this.resolveProvider(config);
+      const semanticQuestions: SemanticQuestion[] = asked.map((q) => ({ id: q.id, prompt: q.question }));
+      semanticDecisions = provider.evaluateWithReport
+        ? (await provider.evaluateWithReport(semanticContext, semanticQuestions)).decisions
+        : await provider.evaluate(semanticContext, semanticQuestions);
+      const answered = new Set(semanticDecisions.map((d) => d.id));
+      const missing = asked.filter((q) => !answered.has(q.id)).map((q) => q.id);
+      if (missing.length > 0) {
+        throw new ProviderError(`System One returned no answer for: ${missing.join(', ')}`, provider.name);
       }
     }
 
-    if (requireOnline && (
-      semanticDecisions.length === 0 ||
-      semanticDecisions.some((decision) =>
-        decision.provider !== 'typesafe' ||
-        decision.metadata?.effectiveProvider !== 'typesafe' ||
-        decision.metadata.fallback
-      )
-    )) {
-      throw new ProviderError(
-        options.onlineOnly
-          ? 'MCP rejected a missing, mock, or fallback semantic result'
-          : 'Required online semantic result is missing or used a mock or fallback provider',
-        'typesafe'
-      );
-    }
+    // 4. Policy evaluation
+    const evalResult = this.policyEngine.evaluate(deterministicResults, semanticDecisions, asked, config, context);
 
-    // Ensure security_sensitive alias is available if security_sensitive_change was evaluated
-    const secDecision = semanticDecisions.find((d) => d.id === 'security_sensitive_change');
-    if (secDecision && !semanticDecisions.some((d) => d.id === 'security_sensitive')) {
-      semanticDecisions.push({
-        ...secDecision,
-        id: 'security_sensitive',
-      });
-    }
-
-    // 6. Policy Engine evaluation
-    const evalResult = this.policyEngine.evaluate(
-      deterministicResults,
-      semanticDecisions,
-      config,
-      context
-    );
-
-    // 7. Store generated findings in finding manager
     for (const finding of evalResult.findings) {
       if (this.findingManager.storeFinding) {
         this.findingManager.storeFinding(finding);
       }
     }
 
-    // Filter findings if specific findingIds were requested
-    let finalFindings = evalResult.findings;
-    if (options.findingIds && options.findingIds.length > 0) {
-      const allowed = new Set(options.findingIds);
-      finalFindings = finalFindings.filter((f) => allowed.has(f.id));
-    }
-
-    // 8. Compute suggested process exit code
-    let exitCode = 0;
-    const blockOnList = config.gate?.block_on || ['BLOCK'];
-
-    if (evalResult.verdict === 'BLOCK' || blockOnList.includes(evalResult.verdict)) {
-      exitCode = 1;
-    } else if (evalResult.verdict === 'REVIEW' && options.strict) {
-      exitCode = 1;
-    } else if (evalResult.verdict === 'WARN' && (options.strict || options.failOnWarn)) {
-      exitCode = 1;
-    }
-
-    // Check requireSemantic failure: exit code 2 if Jev was unavailable or fell back to mock
-    if (options.requireSemantic) {
-      const isFallback =
-        provider.name === 'mock' ||
-        semanticDecisions.some((d) => d.metadata?.fallback === true);
-      if (isFallback) {
-        exitCode = 2;
-      }
-    }
-
     const checkResult: CheckResult = {
       status: evalResult.verdict,
+      canCommit: evalResult.verdict !== 'BLOCK',
       verdictSummary: evalResult.summary,
       task: context.task,
       diffSummary: {
@@ -694,26 +362,23 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         deletions: context.diff.deletions,
         truncated: context.diff.truncated,
       },
-      findings: finalFindings,
+      findings: evalResult.findings,
       resolved: [],
-      remaining: finalFindings.map((f) => f.id),
+      remaining: evalResult.findings.map((f) => f.id),
       resolvedFindings: [],
-      remainingFindings: finalFindings.map((f) => f.id),
+      remainingFindings: evalResult.findings.map((f) => f.id),
       deterministicResults,
-      semanticDecisions: Object.fromEntries(
-        semanticDecisions.map((d) => [d.id, d])
-      ),
+      semanticDecisions: Object.fromEntries(semanticDecisions.map((d) => [d.id, d])),
       metadata: {
         durationMs: Date.now() - startTime,
         timestamp: new Date().toISOString(),
         gitRoot: context.repository?.rootPath ?? cwd,
         headSha: context.repository?.headSha ?? '',
-        cacheHit,
+        questionsAsked: asked.length,
       },
-      exitCode,
     };
 
-    if (checkResult.findings && checkResult.findings.length > 0) {
+    if (checkResult.findings.length > 0) {
       try {
         const repoRoot = context.repository?.rootPath ?? (await this.gitAdapter.getRepositoryRoot(cwd).catch(() => cwd));
         const store = new FileFindingStore(repoRoot);
@@ -807,7 +472,6 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
             timestamp: new Date().toISOString(),
             gitRoot: repoRoot,
             headSha: '',
-            cacheHit: false,
           },
         };
       }
@@ -832,21 +496,18 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       }
     }
 
-    // 2. Run fresh check on the repository
-    const freshCheck = await this.check({
+    // 2. Run a fresh check, re-asking the agent questions that produced the findings being verified
+    const storedQuestions = previousFindings
+      .map((finding) => finding.metadata?.question as QuestionSpec | undefined)
+      .filter((question): question is QuestionSpec => Boolean(question && question.id && question.question));
+    const freshCheck = await this.runCheck({
       cwd,
       scope: options.scope,
       target: options.target,
       task: options.task,
       config: options.config,
       configPath: options.configPath,
-      offline: options.offline,
-      noCache: options.noCache,
-      strict: options.strict,
-      onlineOnly: options.onlineOnly,
-      verifyMode: true,
-      allowCustomProvider: options.allowCustomProvider,
-    });
+    }, storedQuestions);
 
     // 3. Resolve previous findings against fresh findings
     const basePrevious = allStored.length > 0 ? allStored : previousFindings;
@@ -873,7 +534,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
 
       // Check if secret finding was committed into HEAD or still present in file
       if (prev.ruleId.includes('secret') || prev.id.includes('secret')) {
-        const config = await this.resolveConfig(cwd, options.config, options.configPath, options.allowCustomProvider);
+        const config = await this.resolveConfig(cwd, options.config, options.configPath);
         let secretPatterns: SecretPattern[] = SECRET_PATTERNS;
         const userPatterns = config.deterministic?.secret_scan?.patterns;
         if (userPatterns && userPatterns.length > 0) {
@@ -962,43 +623,31 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       report.targetsResolved = targetsResolved;
 
       // Determine overall Gate Status
-      if (options.targetOnly) {
-        report.status = targetsResolved ? 'PASS' : 'BLOCK';
-        report.allResolved = targetsResolved;
-        report.verdictSummary = targetsResolved
-          ? `All ${report.resolved.length} targeted finding(s) successfully resolved (target-only). Gate status: PASS.`
-          : `Verification incomplete: ${report.remaining.length} targeted finding(s) remain unresolved. Gate status: BLOCK.`;
+      if (!targetsResolved) {
+        report.status = 'BLOCK';
+        report.allResolved = false;
+        report.verdictSummary = `Verification failed: ${report.remaining.length} targeted finding(s) remain unresolved. Gate status: BLOCK.`;
+      } else if (freshCheck.status === 'BLOCK') {
+        report.status = freshCheck.status;
+        report.allResolved = false;
+        const blockingSummary = newFindings.length > 0
+          ? `${newFindings.length} new blocking violation(s) detected [${newFindings.map((f) => f.ruleId).join(', ')}]`
+          : `repository check failed gate criteria with status ${freshCheck.status}`;
+        report.verdictSummary = `Targeted finding(s) [${report.resolved.join(', ')}] resolved, but ${blockingSummary}. Gate status: ${freshCheck.status}.`;
       } else {
-        if (!targetsResolved) {
-          report.status = 'BLOCK';
-          report.allResolved = false;
-          report.verdictSummary = `Verification failed: ${report.remaining.length} targeted finding(s) remain unresolved. Gate status: BLOCK.`;
-        } else if (freshCheck.exitCode !== 0) {
-          report.status = freshCheck.status;
-          report.allResolved = false;
-          const blockingSummary = newFindings.length > 0
-            ? `${newFindings.length} new blocking violation(s) detected [${newFindings.map((f) => f.ruleId).join(', ')}]`
-            : `repository check failed gate criteria with status ${freshCheck.status}`;
-          report.verdictSummary = `Targeted finding(s) [${report.resolved.join(', ')}] resolved, but ${blockingSummary}. Gate status: ${freshCheck.status}.`;
-        } else {
-          report.status = 'PASS';
-          report.allResolved = true;
-          report.verdictSummary = newFindings.length > 0
-            ? `All ${report.resolved.length} targeted finding(s) successfully resolved with ${newFindings.length} non-blocking advisory note(s). Gate status: PASS.`
-            : `All ${report.resolved.length} targeted finding(s) successfully resolved. Gate status: PASS.`;
-        }
+        report.status = 'PASS';
+        report.allResolved = true;
+        report.verdictSummary = newFindings.length > 0
+          ? `All ${report.resolved.length} targeted finding(s) successfully resolved with ${newFindings.length} non-blocking advisory note(s). Gate status: PASS.`
+          : `All ${report.resolved.length} targeted finding(s) successfully resolved. Gate status: PASS.`;
       }
     } else {
       targetsResolved = report.remaining.length === 0;
       report.targetsResolved = targetsResolved;
       report.newFindings = [];
-      if (options.targetOnly) {
-        report.status = targetsResolved ? 'PASS' : 'BLOCK';
-        report.allResolved = targetsResolved;
-      } else {
-        report.status = (targetsResolved && freshCheck.exitCode === 0) ? 'PASS' : (targetsResolved ? freshCheck.status : 'BLOCK');
-        report.allResolved = targetsResolved && freshCheck.exitCode === 0;
-      }
+      const freshBlocked = freshCheck.status === 'BLOCK';
+      report.status = (targetsResolved && !freshBlocked) ? 'PASS' : (targetsResolved ? freshCheck.status : 'BLOCK');
+      report.allResolved = targetsResolved && !freshBlocked;
       report.verdictSummary = report.status === 'PASS'
         ? `All findings verified and resolved. Gate status: PASS.`
         : `Verification incomplete or gate blocked with status ${report.status}.`;

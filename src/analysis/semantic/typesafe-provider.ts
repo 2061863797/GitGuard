@@ -2,7 +2,7 @@
  * src/analysis/semantic/typesafe-provider.ts
  * TypeSafeSystemOneProvider implementing the official TypeSafe System One / Jev API.
  * Communicates with POST https://api.typesafe.ai/v1/systemone using the questions map
- * and answers map schema. Provides observable, transparent fallback and exponential retry.
+ * and answers map schema. Fails closed (no fallback) and retries transient errors.
  */
 
 import type { EvaluationContext } from '../../types/context.js';
@@ -15,7 +15,6 @@ import type {
   SemanticRunReport,
 } from '../../types/provider.js';
 import { ProviderError, SecurityViolationError, ConfigurationError } from '../../types/errors.js';
-import { DeterministicMockProvider } from './mock-provider.js';
 
 /**
  * Configuration options for TypeSafeSystemOneProvider.
@@ -25,35 +24,27 @@ export interface TypeSafeProviderOptions {
   baseUrl?: string;
   model?: string;
   timeoutMs?: number;
-  fallbackProvider?: DecisionProvider;
-  strict?: boolean;
   maxRetries?: number;
   retryBackoffMs?: number;
   fetchFn?: typeof fetch;
 }
 
 /**
- * TypeSafe System One API question definition.
+ * TypeSafe System One API question definition (noul = calibrated yes/no probability).
  */
 interface TypeSafeQuestionPayload {
-  type: 'noul' | 'choice' | 'score';
+  type: 'noul';
   instructions: string;
-  criteria?: Record<string, string> | Array<{ name: string; description: string; score?: number }>;
 }
 
 /**
  * TypeSafe System One API answer item definition.
  */
 interface TypeSafeAnswerItem {
-  type?: 'noul' | 'choice' | 'score';
   noul?: number;
   probability?: number;
-  choice?: string;
-  value?: string;
-  score?: number;
   confidence?: number;
   rationale?: string;
-  probabilities?: Record<string, number>;
 }
 
 function assertValidAnswer(question: SemanticQuestion, answer: unknown): asserts answer is TypeSafeAnswerItem {
@@ -66,24 +57,9 @@ function assertValidAnswer(question: SemanticQuestion, answer: unknown): asserts
       (!Number.isFinite(item.confidence) || item.confidence < 0 || item.confidence > 1)) {
     invalid('confidence must be between 0 and 1');
   }
-  if (question.type === 'boolean') {
-    const probability = item.noul ?? item.probability;
-    if (typeof probability !== 'number' || !Number.isFinite(probability) || probability < 0 || probability > 1) {
-      invalid('probability must be between 0 and 1');
-    }
-  } else if (question.type === 'choice') {
-    const value = item.choice ?? item.value;
-    if (typeof value === 'string' && value.trim()) {
-      const choices = question.choices?.map((choice) => typeof choice === 'string' ? choice : choice.value);
-      if (choices?.length && !choices.includes(value)) invalid(`unknown choice ${value}`);
-    } else {
-      invalid('choice is missing');
-    }
-  } else {
-    const maxScore = question.levels && question.levels.length > 1 ? question.levels.length - 1 : 1;
-    if (typeof item.score !== 'number' || !Number.isFinite(item.score) || item.score < 0 || item.score > maxScore) {
-      invalid(`score must be between 0 and ${maxScore}`);
-    }
+  const probability = item.noul ?? item.probability;
+  if (typeof probability !== 'number' || !Number.isFinite(probability) || probability < 0 || probability > 1) {
+    invalid('probability must be between 0 and 1');
   }
 }
 
@@ -95,41 +71,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Helper to construct criteria for choice primitive.
- */
-function buildChoiceCriteria(
-  choices?: string[] | Array<{ value: string; description?: string }>
-): Record<string, string> {
-  const criteria: Record<string, string> = {};
-  if (!choices || !Array.isArray(choices)) return criteria;
-
-  for (const c of choices) {
-    if (typeof c === 'string') {
-      criteria[c] = c;
-    } else if (c && typeof c === 'object') {
-      criteria[c.value] = c.description || c.value;
-    }
-  }
-  return criteria;
-}
-
-/**
- * Helper to construct criteria for score primitive.
- */
-function buildScoreCriteria(
-  levels?: Array<{ name: string; description: string; score?: number }>
-): Array<{ name: string; description: string; score?: number }> {
-  if (!levels || !Array.isArray(levels)) return [];
-  return levels.map((lvl) => ({
-    name: lvl.name,
-    description: lvl.description,
-    score: lvl.score,
-  }));
-}
-
-/**
- * System One / Jev decision provider with official schema alignment,
- * 429/529 exponential retry, and observable fallback state.
+ * System One / Jev decision provider with official schema alignment and
+ * 429/529 exponential retry. Missing keys and failed requests raise ProviderError.
  */
 export class TypeSafeSystemOneProvider implements DecisionProvider {
   public readonly name: string = 'typesafe';
@@ -138,8 +81,6 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
   private baseUrl: string;
   private model: string;
   private timeoutMs: number;
-  private fallbackProvider: DecisionProvider;
-  private strict: boolean;
   private maxRetries: number;
   private retryBackoffMs: number;
   private fetchFn: typeof fetch;
@@ -176,9 +117,6 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
     // Use official recommended alias 'jev-latest' as default model
     this.model = options?.model || 'jev-latest';
     this.timeoutMs = options?.timeoutMs ?? 15000;
-    this.fallbackProvider =
-      options?.fallbackProvider ?? new DeterministicMockProvider();
-    this.strict = options?.strict ?? false;
     this.maxRetries = options?.maxRetries ?? 2;
     this.retryBackoffMs = options?.retryBackoffMs ?? 50;
     this.fetchFn = options?.fetchFn ?? globalThis.fetch;
@@ -204,100 +142,37 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
   }
 
   /**
-   * Evaluates semantic questions and returns a full run report including
-   * provider metadata (effectiveProvider, fallback status, reason, latency).
+   * Evaluates semantic questions and returns a run report with provider metadata.
    */
   public async evaluateWithReport(
     context: EvaluationContext,
     questions: SemanticQuestion[]
   ): Promise<SemanticRunReport> {
-    // 1. Check API Key presence
     if (!this.apiKey || this.apiKey.trim() === '') {
-      if (this.strict) {
-        throw new ProviderError(
-          'TypeSafe API key is not configured and strict mode is enabled',
-          this.name
-        );
-      }
-      return this.delegateToFallback(
-        context,
-        questions,
-        'MISSING_API_KEY: TYPESAFE_API_KEY is unset or empty'
+      throw new ProviderError(
+        'TYPESAFE_API_KEY is not set. Semantic questions require the TypeSafe API; set the key or ask no questions.',
+        this.name
       );
     }
 
     const startTime = Date.now();
-
-    // 2. Call official TypeSafe System One endpoint with retry
     try {
       const { decisions, effectiveModel } = await this.callSystemOneApi(context, questions);
-      const latencyMs = Date.now() - startTime;
-
       const metadata: ProviderMetadata = {
-        requestedProvider: this.name,
-        effectiveProvider: this.name,
+        provider: this.name,
         requestedModel: this.model,
         effectiveModel,
-        fallback: false,
-        latencyMs,
+        latencyMs: Date.now() - startTime,
         questionsCount: questions.length,
       };
-
-      // Attach metadata to each decision for tracing
       for (const d of decisions) {
         d.metadata = metadata;
       }
-
       return { decisions, metadata };
     } catch (err: unknown) {
-      const latencyMs = Date.now() - startTime;
       const message = err instanceof Error ? err.message : String(err);
-
-      if (this.strict) {
-        throw new ProviderError(
-          `TypeSafe System One API request failed: ${message}`,
-          this.name
-        );
-      }
-
-      return this.delegateToFallback(
-        context,
-        questions,
-        `API_ERROR (${message})`,
-        latencyMs
-      );
+      throw new ProviderError(`TypeSafe System One API request failed: ${message}`, this.name);
     }
-  }
-
-  /**
-   * Delegates evaluation to the fallback provider and attaches observable fallback metadata.
-   */
-  private async delegateToFallback(
-    context: EvaluationContext,
-    questions: SemanticQuestion[],
-    reason: string,
-    latencyMs = 0
-  ): Promise<SemanticRunReport> {
-    const fallbackDecisions = await this.fallbackProvider.evaluate(context, questions);
-    const metadata: ProviderMetadata = {
-      requestedProvider: this.name,
-      effectiveProvider: this.fallbackProvider.name,
-      requestedModel: this.model,
-      effectiveModel: `${this.fallbackProvider.name}-heuristic`,
-      fallback: true,
-      fallbackReason: reason,
-      latencyMs,
-      questionsCount: questions.length,
-    };
-
-    for (const d of fallbackDecisions) {
-      d.metadata = metadata;
-    }
-
-    return {
-      decisions: fallbackDecisions,
-      metadata,
-    };
   }
 
   /**
@@ -324,24 +199,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
     // 1. Build questions map per official System One specification
     const questionsMap: Record<string, TypeSafeQuestionPayload> = {};
     for (const q of questions) {
-      if (q.type === 'boolean') {
-        questionsMap[q.id] = {
-          type: 'noul',
-          instructions: q.prompt,
-        };
-      } else if (q.type === 'choice') {
-        questionsMap[q.id] = {
-          type: 'choice',
-          instructions: q.prompt,
-          criteria: buildChoiceCriteria(q.choices),
-        };
-      } else if (q.type === 'score') {
-        questionsMap[q.id] = {
-          type: 'score',
-          instructions: q.prompt,
-          criteria: buildScoreCriteria(q.levels),
-        };
-      }
+      questionsMap[q.id] = { type: 'noul', instructions: q.prompt };
     }
 
     // 2. Build state payload
@@ -440,14 +298,7 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
         const data = (await response.json()) as {
           model?: string;
           answers?: Record<string, TypeSafeAnswerItem>;
-          decisions?: Array<{
-            id: string;
-            probability?: number;
-            value?: string;
-            score?: number;
-            confidence?: number;
-            rationale?: string;
-          }>;
+          decisions?: Array<TypeSafeAnswerItem & { id: string }>;
         };
 
         const effectiveModel = data.model || this.model;
@@ -469,37 +320,15 @@ export class TypeSafeSystemOneProvider implements DecisionProvider {
         }
 
         const decisions: SemanticDecision[] = questions.map((q) => {
-            const ans = answers[q.id]!;
-            const prob = ans.noul ?? ans.probability;
-            let val = ans.choice ?? ans.value;
-            let score = ans.score;
-            const rawScore = ans.score;
-            const probabilities = ans.probabilities;
-
-            if (q.type === 'score' && typeof rawScore === 'number' && q.levels && q.levels.length > 1) {
-              const maxIdx = q.levels.length - 1;
-              score = Math.max(0, Math.min(1, rawScore / maxIdx));
-              if (!val) {
-                const roundedIdx = Math.max(0, Math.min(maxIdx, Math.round(rawScore)));
-                val = q.levels[roundedIdx]?.name;
-              }
-            }
-
-            // In System One, noul represents calibrated probability; confidence is optional/undefined
-            const conf = ans.confidence !== undefined ? ans.confidence : (q.type === 'boolean' ? undefined : 0.9);
-
-            return {
-              id: q.id,
-              probability: prob,
-              value: val,
-              score,
-              rawScore,
-              probabilities,
-              confidence: conf,
-              provider: this.name,
-              rationale: ans.rationale,
-            };
-          });
+          const ans = answers[q.id]!;
+          return {
+            id: q.id,
+            probability: (ans.noul ?? ans.probability)!,
+            confidence: ans.confidence,
+            provider: this.name,
+            rationale: ans.rationale,
+          };
+        });
 
         return { decisions, effectiveModel };
       } catch (err: unknown) {
