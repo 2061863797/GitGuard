@@ -4,6 +4,7 @@ import { parseDiff, parseDiffGitPaths } from '../../../src/git/diff-parser.js';
 import { TypeSafeSystemOneProvider } from '../../../src/analysis/semantic/typesafe-provider.js';
 import { STANDARD_QUESTIONS_MAP } from '../../../src/analysis/semantic/questions.js';
 import { GITGUARD_VERSION } from '../../../src/version.js';
+import { scanDiffForSecrets } from '../../../src/analysis/deterministic/secrets.js';
 import type { EvaluationContext } from '../../../src/types/context.js';
 
 const githubToken = ['ghp', '123456789012345678901234567890123456'].join('_');
@@ -23,6 +24,44 @@ function evaluationContext(): EvaluationContext {
 }
 
 describe('Privacy and Git path contracts', () => {
+  it.each([
+    ['github_token', 'github_pat_' + 'A'.repeat(82), 'github_pat_' + 'A'.repeat(82)],
+    ['stripe_key', 'sk_live_' + 'B'.repeat(24), 'sk_live_' + 'B'.repeat(24)],
+    ['stripe_key', 'sk_test_' + 'C'.repeat(24), 'sk_test_' + 'C'.repeat(24)],
+    ['aws_secret_key', 'aws_secret_access_key="' + 'D'.repeat(40) + '"', 'D'.repeat(40)],
+    ['aws_secret_key', 'AWS_SECRET_KEY=' + 'E'.repeat(40), 'E'.repeat(40)],
+    ['slack_token', 'xoxb-1234567890-1234567890-short', 'xoxb-1234567890-1234567890-short'],
+    ['hardcoded_secret', 'secret_key=`' + opaqueToken + '`', opaqueToken],
+    ['hardcoded_secret', 'secret_key=`opaque<REDACTED_SECRET>original`', 'opaque<REDACTED_SECRET>original'],
+    ['private_key', '-----BEGIN ENCRYPTED PRIVATE KEY-----\nprivate-key-body\n-----END ENCRYPTED PRIVATE KEY-----', 'private-key-body'],
+  ])('redacts locally detected %s from semantic fields and provider requests', async (rule, input, secret) => {
+    const context = evaluationContext();
+    const additions = input.split('\n').map((line) => '+' + line).join('\n');
+    context.diff = parseDiff('diff --git a/app.ts b/app.ts\nnew file mode 100644\n--- /dev/null\n+++ b/app.ts\n@@ -0,0 +1,' + input.split('\n').length + ' @@\n' + additions + '\n');
+    context.task = { task: 'Update ' + input, taskPresent: true, keywords: ['update', secret, secret.toLowerCase()] };
+    context.files = [{ path: 'app.ts', status: 'added', binary: false, spans: [{ startLine: 1, endLine: 3, code: input }], content: input }];
+    context.instructions = [{ sourcePath: 'AGENTS.md', scope: '/', content: input }];
+    context.relatedTests = [{ testPath: 'app.test.ts', relatedSourcePath: 'app.ts', modifiedInDiff: false, contentSnippet: input }];
+    expect(scanDiffForSecrets(context.diff).some((finding) => finding.rule === rule)).toBe(true);
+    const sanitized = sanitizeEvaluationContext(context, { includeFullFiles: true });
+    expect(JSON.stringify(sanitized)).not.toContain(secret);
+    expect(sanitized.task?.keywords).toEqual(['update']);
+    let body = '';
+    const provider = new TypeSafeSystemOneProvider({
+      apiKey: 'synthetic-test-key', strict: true,
+      fetchFn: (async (_url, init) => {
+        body = String(init?.body);
+        return new Response(JSON.stringify({ model: 'jev-test', answers: {
+          task_completed: { type: 'noul', noul: 0.99 },
+        } }), { status: 200 });
+      }) as typeof fetch,
+    });
+    await provider.evaluate(sanitized, [STANDARD_QUESTIONS_MAP.task_completed]);
+    expect(body).not.toContain(secret);
+    expect(body).toContain(REDACTION_TOKEN);
+    expect(context.diff.raw).toContain(secret);
+  });
+
   it.each([
     'api_key=' + opaqueToken,
     'password: shortsecret12',

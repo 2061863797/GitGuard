@@ -129,7 +129,7 @@ export interface GitAdapter {
   /** Get list of changed files with additions, deletions, and status */
   getChangedFiles(scope?: ChangeScope, options?: DiffOptions | string): Promise<ChangedFile[]>;
   /**
-   * Get content of a file at a specific Git ref or current working tree.
+   * Get content at a Git ref, the index (ref ':'), or the current working tree (no ref).
    * Returns null if the file does not exist or was deleted.
    */
   getFileContent(filepath: string, ref?: string, cwd?: string): Promise<string | null>;

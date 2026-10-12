@@ -79,6 +79,19 @@ describe('local UI server', () => {
     ]));
   });
 
+  it('returns the same saved findings for slash and Windows backslash file filters', async () => {
+    await new FileFindingStore(configured).save([{
+      id: 'ui-path-filter', ruleId: 'tests_required', source: 'semantic', status: 'review', severity: 'ERROR',
+      lifecycle: 'active', affectedFiles: ['src/auth.ts'], message: 'Missing coverage', evidence: [], expectedEvidence: [],
+      fingerprint: 'ui-path-filter', createdAt: new Date().toISOString(),
+    }]);
+    for (const filterFile of ['src/auth.ts', 'src\\auth.ts']) {
+      const response = await post('/api/findings', { cwd: configured, filterFile });
+      expect(response.status).toBe(200);
+      expect((await response.json()).data.map((finding: { id: string }) => finding.id)).toEqual(['ui-path-filter']);
+    }
+  });
+
   it('returns a selected repository or folder from the native picker', async () => {
     selectedDirectory = configured;
     const repository = await post('/api/pick-directory', {});

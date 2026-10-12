@@ -12,6 +12,7 @@ import { GitCLIAdapter } from '../../../src/git/adapter.js';
 import {
   NotAGitRepositoryError,
   ForbiddenGitOperationError,
+  GitExecutionError,
   InvalidGitRefError,
 } from '../../../src/types/errors.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
@@ -28,6 +29,70 @@ describe('GitCLIAdapter', () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     await fixture.cleanup();
+  });
+
+  it.each(['中文-secret.txt', 'file with spaces.txt', ' leading.txt'])(
+    'preserves an untracked literal filename in status and diff: %s',
+    async (filePath) => {
+      await fixture.writeFile(filePath, 'untracked content\n');
+      const status = await adapter.getStatus();
+      expect(status.untrackedFiles).toEqual([filePath]);
+      expect(await adapter.getChangedFiles('all')).toEqual([
+        expect.objectContaining({ path: filePath, status: 'added', additions: 1 }),
+      ]);
+    }
+  );
+
+  it('consumes rename source records without treating them as another status entry', async () => {
+    await fixture.writeFile('old name.txt', 'original\n');
+    await fixture.stage();
+    await fixture.commit('initial');
+    await fixture.exec(['mv', 'old name.txt', '新 name.txt']);
+    await fixture.writeFile('other.txt', 'untracked\n');
+    const status = await adapter.getStatus();
+    expect(status.stagedFiles).toEqual(['新 name.txt']);
+    expect(status.untrackedFiles).toEqual(['other.txt']);
+    expect(status.unstagedFiles).toEqual([]);
+  });
+
+  it.runIf(process.platform !== 'win32')('preserves tabs, newlines and backslashes in status paths', async () => {
+    const filePaths = ['tab\tname.txt', 'newline\nname.txt', 'slash\\name.txt', 'trailing.txt ', 'literal -> name.txt'];
+    for (const filePath of filePaths) await fixture.writeFile(filePath, 'content\n');
+    expect((await adapter.getStatus()).untrackedFiles.sort()).toEqual(filePaths.sort());
+  });
+
+  it('disables repository fsmonitor helpers for status and diff reads', async () => {
+    await fixture.writeFile('base.txt', 'base\n');
+    await fixture.stage();
+    await fixture.commit('initial');
+    await fixture.writeFile('.git/fsmonitor-helper.sh', '#!/bin/sh\nprintf ran > .git/fsmonitor-ran\nprintf "token\\0"\n');
+    await fs.chmod(path.join(fixture.path, '.git', 'fsmonitor-helper.sh'), 0o755);
+    await fixture.exec(['config', 'core.fsmonitor', '.git/fsmonitor-helper.sh']);
+    await fixture.exec(['config', 'core.fsmonitorHookVersion', '2']);
+    // Prove that the fixture helper actually runs without the adapter override.
+    await fixture.exec(['status', '--porcelain=v1']);
+    expect(await fixture.readFile('.git/fsmonitor-ran')).toBe('ran');
+    await fixture.deleteFile('.git/fsmonitor-ran');
+    await fixture.writeFile('base.txt', 'changed\n');
+    await adapter.getStatus();
+    expect(await adapter.getDiff('all')).toContain('+changed');
+    await expect(fs.access(path.join(fixture.path, '.git', 'fsmonitor-ran'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects truncated untracked diff output instead of accepting it as exit code 1', async () => {
+    await fixture.writeFile('large.txt', 'large content\n'.repeat(400));
+    const limited = new GitCLIAdapter({ cwd: fixture.path, maxBuffer: 1024 });
+    await expect(limited.executeGit(['diff', '--no-index', '--', '/dev/null', 'large.txt']))
+      .rejects.toThrow(GitExecutionError);
+    await expect(limited.getDiff('all')).rejects.toThrow(GitExecutionError);
+  });
+
+  it('propagates an untracked file read failure instead of dropping the file', async () => {
+    await fixture.writeFile('disappearing.txt', 'content\n');
+    const status = await adapter.getStatus();
+    vi.spyOn(adapter, 'getStatus').mockResolvedValue(status);
+    await fixture.deleteFile('disappearing.txt');
+    await expect(adapter.getDiff('all')).rejects.toThrow(GitExecutionError);
   });
 
   describe('Repository & Safety Verification', () => {
@@ -261,6 +326,17 @@ describe('GitCLIAdapter', () => {
   });
 
   describe('File Content Retrieval', () => {
+    it('reads the index separately from HEAD and the working tree', async () => {
+      await fixture.writeFile('snapshot.txt', 'head\n');
+      await fixture.stage();
+      await fixture.commit('initial');
+      await fixture.writeFile('snapshot.txt', 'index\n');
+      await fixture.stage();
+      await fixture.writeFile('snapshot.txt', 'working\n');
+      expect(await adapter.getFileContent('snapshot.txt', ':')).toBe('index\n');
+      expect(await adapter.getFileContent('snapshot.txt', 'HEAD')).toBe('head\n');
+      expect(await adapter.getFileContent('snapshot.txt')).toBe('working\n');
+    });
     it('disables inherited external diff helpers for untracked files and direct diff calls', async () => {
       await fixture.writeFile('base.txt', 'base\n');
       await fixture.stage();

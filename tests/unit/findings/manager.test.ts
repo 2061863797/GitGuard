@@ -200,6 +200,35 @@ describe('DefaultFindingManager', () => {
   });
 
   describe('resolveFindings', () => {
+    it('keeps a global finding active under its original ID when rationale and probability change', () => {
+      const previous: Finding = {
+        id: 'global-task', ruleId: 'task_completed', source: 'semantic', status: 'block', severity: 'CRITICAL',
+        lifecycle: 'active', affectedFiles: [], message: 'Task completion probability 0.1', probability: 0.1,
+        evidence: [], expectedEvidence: [], fingerprint: 'a'.repeat(64), createdAt: '2026-10-01T00:00:00.000Z',
+      };
+      const fresh: Finding = { ...previous, id: 'fresh-task', fingerprint: 'b'.repeat(64),
+        message: 'Task completion probability 0.15', probability: 0.15, createdAt: '2026-10-12T00:00:00.000Z' };
+      const report = manager.resolveFindings([previous], [fresh]);
+      expect(report.resolved).toEqual([]);
+      expect(report.remaining).toEqual([previous.id]);
+      expect(report.findings).toEqual([expect.objectContaining({
+        id: previous.id, createdAt: previous.createdAt, lifecycle: 'active', probability: 0.15, message: fresh.message,
+      })]);
+    });
+
+    it.each(['source', 'ruleId'] as const)('does not merge global findings with a different %s', (field) => {
+      const previous: Finding = {
+        id: 'global-task', ruleId: 'task_completed', source: 'semantic', status: 'block', severity: 'CRITICAL',
+        lifecycle: 'active', affectedFiles: [], message: 'Task incomplete', evidence: [], expectedEvidence: [],
+        fingerprint: 'a'.repeat(64), createdAt: '2026-10-01T00:00:00.000Z',
+      };
+      const fresh: Finding = { ...previous, id: 'different-global', fingerprint: 'b'.repeat(64),
+        [field]: field === 'source' ? 'deterministic' : 'security_sensitive' };
+      const report = manager.resolveFindings([previous], [fresh]);
+      expect(report.resolved).toEqual([previous.id]);
+      expect(report.remaining).toEqual([fresh.id]);
+    });
+
     it('should mark all findings as resolved when fresh findings is empty', () => {
       const prevFinding: Finding = {
         id: 'finding_01',

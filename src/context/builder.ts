@@ -130,7 +130,8 @@ export class DefaultContextBuilder implements ContextBuilder {
       fullDiffContext,
       repoMetadata.rootPath,
       budget.surroundingLines,
-      options
+      options,
+      diffOptions
     );
 
     // 5. Instruction files discovery
@@ -269,9 +270,27 @@ export class DefaultContextBuilder implements ContextBuilder {
     diff: DiffContext,
     rootPath: string,
     surroundingLines: number,
-    options: ContextBuildOptions
+    options: ContextBuildOptions,
+    diffOptions: DiffOptions
   ): Promise<FileContext[]> {
     const fileContexts: FileContext[] = [];
+    let contentRef: string | undefined;
+    switch (diffOptions.scope) {
+      case 'staged':
+        contentRef = ':';
+        break;
+      case 'commit':
+        contentRef = diffOptions.commitSha;
+        break;
+      case 'range':
+        contentRef = diffOptions.baseRef?.includes('..')
+          ? diffOptions.baseRef.split(/\.\.\.?/)[1]
+          : diffOptions.headRef;
+        break;
+      case 'pull-request':
+        contentRef = diffOptions.headRef || 'HEAD';
+        break;
+    }
 
     for (const diffFile of diff.files) {
       const filePath = diffFile.newPath;
@@ -312,8 +331,8 @@ export class DefaultContextBuilder implements ContextBuilder {
         continue;
       }
 
-      // Read current file content
-      const content = await this.git.getFileContent(filePath, undefined, rootPath);
+      // Use the new-side snapshot of the diff for surrounding code and full-file context.
+      const content = await this.git.getFileContent(filePath, contentRef, rootPath);
       if (content === null) {
         fileContexts.push({
           path: toPosix(filePath),

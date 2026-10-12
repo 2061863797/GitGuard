@@ -6,6 +6,7 @@
 
 import type { EvaluationContext, PrivacyOptions } from '../types/context.js';
 import { parseDiffGitPaths } from '../git/diff-parser.js';
+import { SECRET_PATTERNS } from '../analysis/deterministic/secrets.js';
 
 export const REDACTION_TOKEN = '<REDACTED_SECRET>';
 
@@ -44,7 +45,7 @@ export const DEFAULT_SENSITIVE_FILE_PATTERNS: string[] = [
 const SECRET_REGEX_LIST: Array<{ pattern: RegExp; replacer: (match: string, ...args: string[]) => string }> = [
   // 1. Private Key Blocks
   {
-    pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/gs,
+    pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/gs,
     replacer: () => `-----BEGIN PRIVATE KEY-----\n${REDACTION_TOKEN}\n-----END PRIVATE KEY-----`,
   },
   // 2. AWS Access Key IDs
@@ -87,6 +88,17 @@ const SECRET_REGEX_LIST: Array<{ pattern: RegExp; replacer: (match: string, ...a
     pattern: /(\b(?:password|passwd|api_key|apikey|secret_key|auth_token|access_token|private_key)["']?\s*[:=]\s*)([^\s"'`#,;]{8,})/gi,
     replacer: (_m, prefix: string) => `${prefix}${REDACTION_TOKEN}`,
   },
+  // Keep every built-in scanner format covered by redaction, including future additions.
+  ...SECRET_PATTERNS.map(({ regex, extractGroup }) => ({
+    pattern: new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : `${regex.flags}g`),
+    replacer: (match: string, ...groups: string[]) => {
+      if (!extractGroup) return REDACTION_TOKEN;
+      const value = groups[extractGroup - 1];
+      // A broader scanner pattern must not consume punctuation after an already-redacted assignment.
+      if (value === REDACTION_TOKEN || value === `${REDACTION_TOKEN};`) return match;
+      return match.replace(value, REDACTION_TOKEN);
+    },
+  })),
 ];
 
 /**
@@ -323,7 +335,7 @@ export function sanitizeEvaluationContext(
             : file.hunks.map((hunk) => ({
                 ...hunk,
                 header: shouldRedact ? redactSecrets(hunk.header) : hunk.header,
-                lines: shouldRedact ? hunk.lines.map(redactSecrets) : hunk.lines,
+                lines: shouldRedact ? redactSecrets(hunk.lines.join('\n')).split('\n') : hunk.lines,
               })),
         };
       }),

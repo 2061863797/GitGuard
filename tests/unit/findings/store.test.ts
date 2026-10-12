@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { FileFindingStore } from '../../../src/findings/store.js';
+import { FileFindingStore, MemoryFindingStore } from '../../../src/findings/store.js';
 import { GitGuardError } from '../../../src/types/errors.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import type { Finding } from '../../../src/types/finding.js';
@@ -23,6 +23,22 @@ describe('FileFindingStore corruption handling', () => {
   afterEach(async () => {
     await fixture.cleanup();
   });
+
+  it.each(['src/auth.ts', 'src\\auth.ts'])(
+    'filters persisted and memory findings consistently for %s',
+    async (file) => {
+      const records: Finding[] = ['src/auth.ts', 'src\\auth.ts', 'other/auth.ts'].map((filePath, i) => ({
+        id: 'filter-' + i, ruleId: 'test', source: 'semantic', status: 'review', severity: 'ERROR', lifecycle: 'active',
+        affectedFiles: [filePath], message: 'Synthetic finding', evidence: [], expectedEvidence: [],
+        fingerprint: 'filter-' + i, createdAt: new Date().toISOString(),
+      }));
+      const memory = new MemoryFindingStore(records);
+      await store.save(records);
+      for (const candidate of [store, memory]) {
+        expect((await candidate.list({ file })).map((finding) => finding.id)).toEqual(['filter-0', 'filter-1']);
+      }
+    }
+  );
 
   it.each(['{invalid json', '{"findings":[]}'])(
     'preserves invalid persisted findings on attempted save: %s',

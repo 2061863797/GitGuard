@@ -160,7 +160,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       : args;
 
     try {
-      const result = await execFileAsync('git', safeArgs, {
+      const result = await execFileAsync('git', ['-c', 'core.fsmonitor=false', ...safeArgs], {
         cwd: targetCwd,
         maxBuffer: this.maxBuffer,
         timeout: this.timeoutMs,
@@ -183,6 +183,8 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
         stdout?: string | Buffer;
         stderr?: string | Buffer;
         message?: string;
+        killed?: boolean;
+        signal?: string | null;
       };
 
       const stderrStr = execErr.stderr ? execErr.stderr.toString() : '';
@@ -190,7 +192,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       const exitCode = typeof execErr.code === 'number' ? execErr.code : 1;
 
       // Special handling for git diff --no-index: exit code 1 indicates diffs were found (success)
-      if (args.includes('--no-index') && exitCode === 1) {
+      if (args.includes('--no-index') && execErr.code === 1 && !execErr.killed && !execErr.signal && stdoutStr.length > 0) {
         return {
           stdout: stdoutStr,
           stderr: stderrStr,
@@ -317,32 +319,25 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
     const currentBranch = await this.getCurrentBranch(targetCwd);
     const headSha = await this.getHeadSha(targetCwd);
 
-    const res = await this.executeGit(['status', '--porcelain=v1', '-uall'], targetCwd);
-    const lines = res.stdout.split(/\r?\n/);
+    const res = await this.executeGit(['status', '--porcelain=v1', '-z', '-uall'], targetCwd);
+    const entries = res.stdout.split('\0');
 
     const stagedFiles: string[] = [];
     const unstagedFiles: string[] = [];
     const untrackedFiles: string[] = [];
 
-    for (const rawLine of lines) {
-      if (!rawLine || rawLine.length < 3) continue;
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (!entry || entry.length < 4) continue;
 
-      const x = rawLine[0];
-      const y = rawLine[1];
-      let filePath = rawLine.substring(3).trim();
+      const x = entry[0];
+      const y = entry[1];
+      // Porcelain -z emits literal paths, with the destination first for renames/copies.
+      const filePath = entry.substring(3);
 
-      // Handle quoted paths
-      if (filePath.startsWith('"') && filePath.endsWith('"')) {
-        filePath = filePath.substring(1, filePath.length - 1);
+      if (x === 'R' || x === 'C' || y === 'R' || y === 'C') {
+        i++; // Consume the second NUL-delimited record containing the original path.
       }
-
-      // Handle renames formatted as "old -> new"
-      if (filePath.includes(' -> ')) {
-        const parts = filePath.split(' -> ');
-        filePath = parts[1].replace(/^"|"$/g, '');
-      }
-
-      filePath = toPosixPath(filePath);
 
       if (x === '?' && y === '?') {
         untrackedFiles.push(filePath);
@@ -495,16 +490,12 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
           continue;
         }
 
-        try {
-          const noIndexRes = await this.executeGit(
-            ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-index', '--', '/dev/null', untracked],
-            targetCwd
-          );
-          if (noIndexRes.stdout) {
-            diffText = diffText ? `${diffText}\n${noIndexRes.stdout}` : noIndexRes.stdout;
-          }
-        } catch {
-          // Silently skip if cannot read untracked file
+        const noIndexRes = await this.executeGit(
+          ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-index', '--', '/dev/null', untracked],
+          targetCwd
+        );
+        if (noIndexRes.stdout) {
+          diffText = diffText ? `${diffText}\n${noIndexRes.stdout}` : noIndexRes.stdout;
         }
       }
     }
@@ -565,7 +556,7 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
   }
 
   /**
-   * Gets file content at a specific Git ref or from current working tree.
+   * Gets file content at a Git ref, the index (ref ':'), or the current working tree.
    * Returns null if file does not exist or was deleted.
    */
   public async getFileContent(
@@ -580,7 +571,8 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
     if (ref) {
       assertSafeRef(ref);
       try {
-        const res = await this.executeGit(['show', `${ref}:${relativePath}`], targetCwd);
+        const objectPath = ref === ':' ? `:${relativePath}` : `${ref}:${relativePath}`;
+        const res = await this.executeGit(['show', objectPath], targetCwd);
         return res.stdout;
       } catch {
         return null;

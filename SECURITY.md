@@ -17,7 +17,7 @@ Finding records → current repository store → verification and state updates
 
 The deterministic scanner receives unredacted changes so privacy filtering does not hide secrets from local scanning. Semantic context omits sensitive-file hunks and code spans, and applies pattern-based redaction to task text, derived keywords, diffs, surrounding code, instructions and related test snippets.
 
-Known patterns include private-key blocks, several provider token formats, bearer tokens and named password/API-key assignments. Quoted assignments and unquoted `:` / `=` forms are covered. Redaction is heuristic: it can miss unknown formats, short values and secrets without recognizable labels. It does not provide general high-entropy detection or guarantee that every secret is removed.
+Known patterns include private-key blocks, GitHub tokens (including fine-grained PATs), Stripe keys, AWS access and labeled secret keys, bearer tokens and named password/API-key assignments. Redaction also reuses every built-in deterministic scanner pattern to prevent the two format lists from diverging. Quoted assignments and unquoted `:` / `=` forms are covered. Custom scanner patterns are not automatically redaction rules. Redaction is heuristic: it can miss unknown formats, short values and secrets without recognizable labels. It does not provide general high-entropy detection or guarantee that every secret is removed.
 
 Online payloads can include task intent and keywords, file names and statistics, branch/commit metadata, diffs, surrounding code, related tests and repository instructions. Sensitive-file names and other metadata may still identify the project. Review the selected scope and privacy settings before using online checks for confidential projects.
 
@@ -25,7 +25,9 @@ MCP results and error messages apply the same known-secret redaction while prese
 
 ### Git reads and project commands
 
-The Git adapter uses an allowlist, rejects mutating commands and output-file options, and disables optional index locks. Diff, show and log calls disable external diff helpers and text conversion, including no-index diffs for untracked files. External blob filter options are rejected. GitGuard does not create Git commits or push changes.
+The Git adapter uses an allowlist, rejects mutating commands and output-file options, and disables optional index locks and repository-configured fsmonitor helpers for every Git call. Diff, show and log calls disable external diff helpers and text conversion, including no-index diffs for untracked files. External blob filter options are rejected. Status paths use NUL-delimited porcelain records so Unicode and special filenames are preserved. Unreadable or truncated untracked diffs fail the operation instead of silently dropping files or treating partial output as a complete diff. GitGuard does not create Git commits or push changes.
+
+Surrounding code and optional full-file context use the diff's new-side snapshot: the index for staged changes, the selected commit for commit checks, and the right endpoint for range or pull-request checks. Working and all scopes use current working-tree content. Repository instructions and related-test discovery still use the current workspace.
 
 Configured test, lint and typecheck commands run in the repository with timeouts and without shell interpolation. Those commands can run repository scripts and write files. They are not an operating-system sandbox. Read their configuration and scripts before checking an unfamiliar repository.
 
@@ -46,6 +48,8 @@ Disk records are loaded from the current repository. New finding provenance incl
 Corrupt or unreadable stores stop verification. Writes use a temporary file in the destination directory and atomic replacement while holding the store lock; failed replacement does not overwrite existing records and is reported as a write error. Verification that cannot persist its state returns `BLOCK`, `allResolved: false` and `metadata.persistenceOk: false`. A successful in-memory assessment is not evidence of durable storage.
 
 The verifier also checks tracked finding content at `HEAD` to avoid resolving supported violations merely because the offending changes were committed. Finding IDs and fingerprints are not globally scoped identifiers for unrelated repositories. Reports apply to the selected targets and Git scope.
+
+An empty diff still evaluates enabled semantic rules with their configured thresholds. Global findings without affected files retain their ID when the same rule and source remain violated, even if the model's rationale or probability changes. A targeted finding resolves only when fresh evaluation no longer matches the violation; an improved probability that still requires review is not resolution.
 
 ### Model limitations
 

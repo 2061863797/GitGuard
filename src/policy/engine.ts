@@ -66,31 +66,6 @@ export class DefaultPolicyEngine implements PolicyEngine {
 
     const hasTask = Boolean(context.task?.task && context.task.task.trim().length > 0);
     const changedFiles = (context.diff?.files || []).map((f) => f.newPath || f.oldPath || '');
-    const hasDeterministicFailures = (deterministicResults || []).some((r) => r.status === 'failed');
-    const taskFailedOnCleanChangeset =
-      hasTask &&
-      (semanticDecisions || []).some(
-        (d) => d.id === 'task_completed' && d.probability !== undefined && d.probability < 0.2
-      );
-    const isDiffEmpty =
-      (!context.diff || (!context.diff.raw?.trim() && changedFiles.length === 0)) &&
-      !hasDeterministicFailures &&
-      !taskFailedOnCleanChangeset;
-
-    // Short-circuit on completely empty repository changeset when no failures were detected
-    if (isDiffEmpty) {
-      return {
-        verdict: 'PASS',
-        summary: 'Clean changeset with zero modifications. Gate verdict: PASS.',
-        ruleMatches: [],
-        findings: [],
-        passedRules: (deterministicResults || [])
-          .filter((r) => r.status === 'passed')
-          .map((r) => `deterministic.${r.id}`),
-        violatedRules: [],
-      };
-    }
-
     // 1. Evaluate deterministic check outputs
     if (deterministicResults && deterministicResults.length > 0) {
       for (const res of deterministicResults) {
@@ -238,12 +213,14 @@ export class DefaultPolicyEngine implements PolicyEngine {
     const verdict = synthesizeGateVerdict(ruleMatches);
 
     // 6. Generate structured findings via FindingManager
-    const findings = this.findingManager.createFindings(ruleMatches, context);
+    const findings = ruleMatches.length > 0 ? this.findingManager.createFindings(ruleMatches, context) : [];
 
     // 7. Compose verdict summary
     let summary: string;
     if (verdict === 'PASS') {
-      summary = `Gate verdict: PASS. All ${passedRulesSet.size} evaluated check(s) and rule(s) passed cleanly.`;
+      summary = !context.diff?.raw?.trim() && changedFiles.length === 0
+        ? 'Clean changeset with zero modifications. Gate verdict: PASS.'
+        : `Gate verdict: PASS. All ${passedRulesSet.size} evaluated check(s) and rule(s) passed cleanly.`;
     } else {
       const violatedList = Array.from(violatedRulesSet).join(', ');
       summary = `Gate verdict: ${verdict}. Detected ${ruleMatches.length} rule violation(s) [${violatedList}].`;

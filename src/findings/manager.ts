@@ -45,6 +45,12 @@ function calculateFindingMatchScore(fresh: Finding, prev: Finding): number {
   // Check affected files overlap
   const freshFiles = new Set(fresh.affectedFiles || []);
   const prevFiles = new Set(prev.affectedFiles || []);
+  if (
+    freshFiles.size === 0 && prevFiles.size === 0 &&
+    freshCleanRule === prevCleanRule && fresh.source && fresh.source === prev.source
+  ) {
+    score += 0.45;
+  }
   let commonCount = 0;
   for (const f of freshFiles) {
     if (prevFiles.has(f)) commonCount++;

@@ -218,7 +218,7 @@ describe('Policy Engine & Rule Evaluators', () => {
       };
     });
 
-    it('should short-circuit and return PASS when changeset is completely empty', () => {
+    it('returns PASS for an empty changeset with no rule violations', () => {
       const emptyContext: EvaluationContext = {
         ...mockContext,
         diff: {
@@ -233,7 +233,7 @@ describe('Policy Engine & Rule Evaluators', () => {
       const result = engine.evaluate([], [], mockPolicy, emptyContext);
 
       expect(result.verdict).toBe('PASS');
-      expect(result.summary).toContain('Clean changeset');
+      expect(result.summary).toContain('Gate verdict: PASS');
       expect(result.ruleMatches).toHaveLength(0);
       expect(result.findings).toHaveLength(0);
       expect(result.passedRules).toHaveLength(0);
@@ -363,6 +363,31 @@ describe('Policy Engine & Rule Evaluators', () => {
     });
 
     describe('Standard Semantic Rule Evaluations', () => {
+      it.each([[0.19, 'BLOCK'], [0.2, 'REVIEW'], [0.3, 'REVIEW'], [0.59, 'REVIEW'], [0.6, 'PASS']])(
+        'applies task thresholds on an empty changeset at probability %s',
+        (probability, verdict) => {
+          const emptyContext = { ...mockContext, diff: { ...mockContext.diff, raw: '', files: [] } };
+          const decision = { id: 'task_completed', probability: probability as number, provider: 'mock' as const };
+          expect(engine.evaluate([], [decision], mockPolicy, emptyContext).verdict).toBe(verdict);
+          expect(engine.evaluate([], [decision], mockPolicy, mockContext).verdict).toBe(verdict);
+        }
+      );
+
+      it('honors configured task thresholds and disabled rules on an empty changeset', () => {
+        const emptyContext = { ...mockContext, diff: { ...mockContext.diff, raw: '', files: [] } };
+        const decisions = [{ id: 'task_completed', probability: 0.3, provider: 'mock' as const }];
+        const policy = { ...mockPolicy, rules: { task_completed: { block_below: 0.5, review_below: 0.8 } } };
+        expect(engine.evaluate([], decisions, policy, emptyContext).verdict).toBe('BLOCK');
+        policy.rules.task_completed = { ...policy.rules.task_completed, enabled: false };
+        expect(engine.evaluate([], decisions, policy, emptyContext).verdict).toBe('PASS');
+      });
+
+      it('honors non-task semantic violations on an empty changeset', () => {
+        const emptyContext = { ...mockContext, diff: { ...mockContext.diff, raw: '', files: [] } };
+        expect(engine.evaluate([], [{ id: 'security_sensitive_change', probability: 0.95, provider: 'mock' }],
+          mockPolicy, emptyContext).verdict).toBe('BLOCK');
+      });
+
       it('should evaluate task_completed with inverted thresholds (review_below / block_below)', () => {
         // Case 1: prob = 0.15 (< block_below 0.20) -> BLOCK
         const decisionsBlock: SemanticDecision[] = [

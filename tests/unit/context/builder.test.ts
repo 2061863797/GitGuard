@@ -80,6 +80,60 @@ describe('DefaultContextBuilder', () => {
   });
 
   describe('Surrounding Lines & Overlapping Span Merging', () => {
+    it('uses the index for staged spans and the working tree for working/all spans', async () => {
+      await fixture.writeFile('snapshot.ts', 'export const snapshot = "HEAD";\n');
+      await fixture.stage();
+      await fixture.commit('initial');
+      await fixture.writeFile('snapshot.ts', 'export const snapshot = "INDEX";\n');
+      await fixture.stage();
+      await fixture.writeFile('snapshot.ts', 'export const snapshot = "WORKTREE";\n');
+      for (const scope of ['staged', 'working', 'all'] as const) {
+        const context = await builder.buildContext({ cwd: fixture.path, scope, privacy: { includeFullFiles: true } });
+        const expected = scope === 'staged' ? 'INDEX' : 'WORKTREE';
+        expect(context.files[0].spans[0].code).toBe(`export const snapshot = "${expected}";`);
+        expect(context.files[0].content).toBe(`export const snapshot = "${expected}";\n`);
+      }
+    });
+
+    it.each(['changed', 'deleted'])(
+      'uses a historical commit snapshot when the working file was %s',
+      async (workingState) => {
+        await fixture.writeFile('snapshot.ts', 'export const snapshot = "HISTORICAL";\n');
+        await fixture.stage();
+        const commitSha = await fixture.commit('historical');
+        if (workingState === 'changed') await fixture.writeFile('snapshot.ts', 'export const snapshot = "WORKTREE";\n');
+        else await fixture.deleteFile('snapshot.ts');
+        const context = await builder.buildContext({
+          cwd: fixture.path, scope: 'commit', diffOptions: { commitSha }, privacy: { includeFullFiles: true },
+        });
+        expect(context.files[0].spans[0].code).toBe('export const snapshot = "HISTORICAL";');
+        expect(context.files[0].content).toBe('export const snapshot = "HISTORICAL";\n');
+      }
+    );
+
+    it.each(['endpoints', 'two-dot', 'three-dot', 'pull-request'])(
+      'uses the right endpoint snapshot for %s comparison',
+      async (comparison) => {
+        await fixture.writeFile('snapshot.ts', 'export const snapshot = "BASE";\n');
+        await fixture.stage();
+        const baseRef = await fixture.commit('base');
+        await fixture.writeFile('snapshot.ts', 'export const snapshot = "TARGET";\n');
+        await fixture.stage();
+        const headRef = await fixture.commit('target');
+        await fixture.writeFile('snapshot.ts', 'export const snapshot = "CURRENT_HEAD";\n');
+        await fixture.stage();
+        await fixture.commit('later');
+        await fixture.deleteFile('snapshot.ts');
+        const scope = comparison === 'pull-request' ? 'pull-request' : 'range';
+        const diffOptions = comparison === 'two-dot' || comparison === 'three-dot'
+          ? { baseRef: baseRef + (comparison === 'two-dot' ? '..' : '...') + headRef }
+          : { baseRef, headRef };
+        const context = await builder.buildContext({ cwd: fixture.path, scope, diffOptions });
+        expect(context.diff.raw).toContain('+export const snapshot = "TARGET";');
+        expect(context.files[0].spans[0].code).toBe('export const snapshot = "TARGET";');
+      }
+    );
+
     it('should extract surrounding lines and merge overlapping intervals', async () => {
       // Create a 100-line file
       const lines: string[] = [];

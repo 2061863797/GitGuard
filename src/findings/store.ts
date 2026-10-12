@@ -105,7 +105,8 @@ export class MemoryFindingStore implements FindingStore {
       items = items.filter((f) => f.ruleId === filter.ruleId);
     }
     if (filter.file) {
-      items = items.filter((f) => f.affectedFiles?.includes(filter.file!));
+      const normalizedFile = filter.file.replace(/\\/g, '/');
+      items = items.filter((f) => f.affectedFiles?.some((file) => file.replace(/\\/g, '/') === normalizedFile));
     }
     return items;
   }
@@ -326,7 +327,8 @@ export class FileFindingStore implements FindingStore {
       items = items.filter((f) => f.ruleId === filter.ruleId);
     }
     if (filter.file) {
-      items = items.filter((f) => f.affectedFiles?.includes(filter.file!));
+      const normalizedFile = filter.file.replace(/\\/g, '/');
+      items = items.filter((f) => f.affectedFiles?.some((file) => file.replace(/\\/g, '/') === normalizedFile));
     }
     return items;
   }

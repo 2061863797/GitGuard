@@ -563,7 +563,7 @@ describe('Empirical Challenger M3-1: Policy Engine Stress Suite', () => {
       expect(result.verdict).toBe('PASS');
     });
 
-    it('should cleanly handle empty changeset short-circuit', () => {
+    it('should cleanly evaluate an empty changeset without rule violations', () => {
       const cleanContext: EvaluationContext = {
         ...baseContext,
         diff: { raw: '', files: [], insertions: 0, deletions: 0, truncated: false },
