@@ -7371,6 +7371,7 @@ import * as path5 from "node:path";
 import process2 from "node:process";
 
 // src/enforcement/commit-command.ts
+var CHANGE_DIR_COMMANDS = /* @__PURE__ */ new Set(["cd", "pushd", "set-location", "sl", "push-location"]);
 function tokenize(segment) {
   const tokens = [];
   let current = "";
@@ -7430,8 +7431,9 @@ function findGitCommits(command) {
   let staged = false;
   for (const segment of splitSegments(command)) {
     const tokens = tokenize(segment);
-    if (tokens[0] === "cd" && tokens[1]) {
-      dir = joinDir(dir, tokens[1]);
+    if (CHANGE_DIR_COMMANDS.has(tokens[0]?.toLowerCase()) && tokens[1]) {
+      const target = tokens[1] === "-Path" || tokens[1] === "-LiteralPath" ? tokens[2] : tokens[1];
+      if (target) dir = joinDir(dir, target);
       continue;
     }
     const gitIndex = tokens.findIndex((token) => token === "git" || /[\\/]git(\.exe)?$/i.test(token));
@@ -8279,6 +8281,7 @@ var CONFIG_FILE_NAMES = [
   "gitguard.yml",
   "gitguard.yaml"
 ];
+var MAX_COMMAND_TIMEOUT_MS = 60 * 60 * 1e3;
 
 // src/enforcement/commit-gate.ts
 var ZERO_SHA = "0".repeat(40);
@@ -8385,6 +8388,7 @@ async function evaluateCommitGate(repoDir, options = {}, exec = defaultGitExec()
 }
 
 // src/hook.ts
+var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process2.stdin) {
@@ -8399,7 +8403,7 @@ async function main() {
   } catch {
     return 0;
   }
-  if (event.tool_name !== "Bash" || typeof event.tool_input?.command !== "string") {
+  if (!SHELL_TOOLS.has(event.tool_name ?? "") || typeof event.tool_input?.command !== "string") {
     return 0;
   }
   const baseDir = event.cwd || process2.cwd();

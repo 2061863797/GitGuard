@@ -12,6 +12,9 @@ export interface GitCommitInvocation {
   stagesFirst: boolean;
 }
 
+/** Directory-changing commands in POSIX shells and PowerShell. */
+const CHANGE_DIR_COMMANDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'push-location']);
+
 /** Splits a command line into words, honoring single and double quotes. */
 function tokenize(segment: string): string[] {
   const tokens: string[] = [];
@@ -71,7 +74,7 @@ function joinDir(base: string | undefined, next: string): string {
 }
 
 /**
- * Returns every `git commit` in the command, tracking `cd <dir>` and `git -C <dir>`.
+ * Returns every `git commit` in the command, tracking directory changes (cd, pushd, Set-Location) and `git -C <dir>`.
  */
 export function findGitCommits(command: string): GitCommitInvocation[] {
   const commits: GitCommitInvocation[] = [];
@@ -79,8 +82,9 @@ export function findGitCommits(command: string): GitCommitInvocation[] {
   let staged = false;
   for (const segment of splitSegments(command)) {
     const tokens = tokenize(segment);
-    if (tokens[0] === 'cd' && tokens[1]) {
-      dir = joinDir(dir, tokens[1]);
+    if (CHANGE_DIR_COMMANDS.has(tokens[0]?.toLowerCase()) && tokens[1]) {
+      const target = tokens[1] === '-Path' || tokens[1] === '-LiteralPath' ? tokens[2] : tokens[1];
+      if (target) dir = joinDir(dir, target);
       continue;
     }
     const gitIndex = tokens.findIndex((token) => token === 'git' || /[\\/]git(\.exe)?$/i.test(token));

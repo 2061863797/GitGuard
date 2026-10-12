@@ -2,9 +2,14 @@
   "mcpServers": {
     "gitguard": {
       "command": "node",
-      "args": ["gitguard-mcp.mjs"],
+      "args": [
+        "gitguard-mcp.mjs"
+      ],
       "cwd": "server",
-      "env_vars": ["TYPESAFE_API_KEY"]
+      "env_vars": [
+        "TYPESAFE_API_KEY"
+      ],
+      "tool_timeout_sec": 900
     }
   }
 }

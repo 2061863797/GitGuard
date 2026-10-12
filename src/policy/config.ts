@@ -6,14 +6,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import YAML from 'yaml';
-import type { PolicyConfig } from '../types/policy.js';
+import type { PolicyConfig, RuleSpec } from '../types/policy.js';
 import { ConfigurationError } from '../types/errors.js';
 import { safeReadRepoFile } from '../context/fs.js';
 import { validateCustomSecretPattern } from '../analysis/deterministic/secrets.js';
 
 /**
- * Canonical default GitGuard policy configuration.
- * Used when no .gitguard.yml is present, or as a baseline merged with repository overrides.
+ * Built-in GitGuard configuration. `.gitguard.yml` can only add project commands, rules and
+ * extra secret patterns; context budgets, model settings and privacy filtering are fixed here.
  */
 export const DEFAULT_POLICY_CONFIG: PolicyConfig = {
   version: 1,
@@ -73,50 +73,10 @@ export const CONFIG_FILE_NAMES = [
 ];
 
 /**
- * Keys that must never be merged as plain data: assigning them would mutate
- * the prototype chain instead of setting an own property (prototype pollution).
- * Note: `yaml` preserves `__proto__` as an own key (visible via Object.keys),
- * so a malicious `.gitguard.yml` could otherwise smuggle these past validation.
+ * Keys rejected anywhere in the file: `yaml` preserves `__proto__` as an own key,
+ * so a malicious `.gitguard.yml` could otherwise smuggle prototype-polluting data through.
  */
 const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
-/**
- * Recursively deep-merges source object properties into a cloned target object.
- * Skips prototype-polluting keys (`__proto__`, `constructor`, `prototype`).
- */
-export function deepMerge<T extends Record<string, any>>(target: T, source: Record<string, any>): T {
-  const result = { ...target } as Record<string, any>;
-
-  for (const key of Object.keys(source)) {
-    // Prototype pollution guard: never copy magic keys, even if present as
-    // own properties of the parsed YAML object.
-    if (UNSAFE_MERGE_KEYS.has(key)) {
-      continue;
-    }
-
-    const sourceVal = source[key];
-    const targetVal = result[key];
-
-    if (sourceVal === undefined) {
-      continue;
-    }
-
-    if (
-      sourceVal !== null &&
-      typeof sourceVal === 'object' &&
-      !Array.isArray(sourceVal) &&
-      targetVal !== null &&
-      typeof targetVal === 'object' &&
-      !Array.isArray(targetVal)
-    ) {
-      result[key] = deepMerge(targetVal, sourceVal);
-    } else {
-      result[key] = sourceVal;
-    }
-  }
-
-  return result as T;
-}
 
 /**
  * Recursively detects prototype-polluting keys anywhere in a parsed config
@@ -178,83 +138,101 @@ export function validateRule(raw: unknown, label: string): string[] {
 }
 
 /**
- * Validates the raw configuration object structure.
+ * Top-level keys accepted in .gitguard.yml. Everything else uses built-in defaults.
+ */
+const TOP_LEVEL_KEYS = ['version', 'deterministic', 'rules', 'secret_scan'];
+const COMMAND_CHECKS = ['test', 'lint', 'typecheck'] as const;
+const MAX_COMMAND_TIMEOUT_MS = 60 * 60 * 1000;
+
+function unknownKeys(obj: Record<string, unknown>, allowed: string[], label: string): string[] {
+  return Object.keys(obj)
+    .filter((key) => !allowed.includes(key))
+    .map((key) => `${label}${key} is not supported (allowed: ${allowed.join(', ')})`);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateCommand(raw: unknown, label: string): string[] {
+  const isCommandText = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && !/[\r\n\0]/.test(value);
+  if (typeof raw === 'string') {
+    return isCommandText(raw) ? [] : [`${label} must be a single-line command`];
+  }
+  if (!isPlainObject(raw)) {
+    return [`${label} must be a command string or an object with run and optional timeout_ms`];
+  }
+  const errors = unknownKeys(raw, ['run', 'timeout_ms'], `${label}.`);
+  if (!isCommandText(raw.run)) {
+    errors.push(`${label}.run must be a single-line command`);
+  }
+  if (raw.timeout_ms !== undefined &&
+      (!Number.isInteger(raw.timeout_ms) || (raw.timeout_ms as number) <= 0 || (raw.timeout_ms as number) > MAX_COMMAND_TIMEOUT_MS)) {
+    errors.push(`${label}.timeout_ms must be a positive integer of milliseconds (at most ${MAX_COMMAND_TIMEOUT_MS})`);
+  }
+  return errors;
+}
+
+/**
+ * Validates the raw .gitguard.yml object. Only version, deterministic (test/lint/typecheck),
+ * rules and secret_scan.patterns are accepted; unknown keys are errors so typos are not ignored.
  */
 export function validateConfig(raw: unknown): { valid: boolean; errors: string[] } {
+  if (!isPlainObject(raw)) {
+    return { valid: false, errors: ['Configuration must be a YAML mapping'] };
+  }
   const errors: string[] = [];
-
-  if (!raw || typeof raw !== 'object') {
-    return { valid: false, errors: ['Configuration must be a non-null object'] };
-  }
-
   if (containsUnsafeKeys(raw)) {
-    errors.push(
-      'Configuration contains forbidden keys (__proto__/constructor/prototype). Remove them from .gitguard.yml.'
-    );
+    errors.push('Configuration contains forbidden keys (__proto__/constructor/prototype). Remove them from .gitguard.yml.');
+  }
+  errors.push(...unknownKeys(raw, TOP_LEVEL_KEYS, ''));
+
+  if (raw.version !== undefined && raw.version !== 1 && raw.version !== '1') {
+    errors.push('version must be 1');
   }
 
-  const obj = raw as Record<string, any>;
-
-  if (obj.version !== undefined && typeof obj.version !== 'number' && typeof obj.version !== 'string') {
-    errors.push('version must be a number or string');
-  }
-
-  if (obj.system_one && typeof obj.system_one === 'object') {
-    if (obj.system_one.apiKey !== undefined) {
-      errors.push(
-        'Storing apiKey directly in .gitguard.yml is forbidden for credential security. Set the TYPESAFE_API_KEY environment variable instead.'
-      );
-    }
-    if (obj.system_one.baseUrl !== undefined) {
-      const rawUrl = String(obj.system_one.baseUrl).trim().replace(/\/+$/, '');
-      const isOfficial =
-        rawUrl === 'https://api.typesafe.ai' ||
-        rawUrl === 'https://api.typesafe.ai/v1' ||
-        rawUrl === 'https://api.typesafe.ai/v1/systemone';
-      if (!isOfficial) {
-        errors.push(
-          `Repository configuration (.gitguard.yml) cannot override system_one.baseUrl to custom endpoint ('${rawUrl}') to prevent API key exfiltration. Use the TYPESAFE_BASE_URL environment variable instead.`
-        );
-      }
-    }
-  }
-
-  if (obj.privacy !== undefined &&
-      (!obj.privacy || typeof obj.privacy !== 'object' || Array.isArray(obj.privacy))) {
-    errors.push('privacy must be an object');
-  } else {
-    if (obj.privacy?.redact_secrets !== undefined && obj.privacy.redact_secrets !== true) {
-      errors.push('Repository configuration cannot disable privacy.redact_secrets');
-    }
-    if (obj.privacy?.include_full_files !== undefined && obj.privacy.include_full_files !== false) {
-      errors.push('Repository configuration cannot enable privacy.include_full_files');
-    }
-  }
-
-  if (obj.deterministic?.secret_scan?.patterns !== undefined) {
-    if (!Array.isArray(obj.deterministic.secret_scan.patterns)) {
-      errors.push('deterministic.secret_scan.patterns must be an array of regex strings');
+  if (raw.deterministic !== undefined) {
+    if (!isPlainObject(raw.deterministic)) {
+      errors.push('deterministic must be a mapping of test, lint and typecheck commands');
     } else {
-      for (let i = 0; i < obj.deterministic.secret_scan.patterns.length; i++) {
-        const pattern = obj.deterministic.secret_scan.patterns[i];
-        if (typeof pattern !== 'string' || !pattern.trim()) {
-          errors.push(`deterministic.secret_scan.patterns[${i}] must be a non-empty string`);
-        } else {
-          const reason = validateCustomSecretPattern(pattern);
-          if (reason) {
-            errors.push(`deterministic.secret_scan.patterns[${i}] is unsafe: ${reason}`);
-          }
+      errors.push(...unknownKeys(raw.deterministic, [...COMMAND_CHECKS], 'deterministic.'));
+      for (const checkId of COMMAND_CHECKS) {
+        if (raw.deterministic[checkId] !== undefined) {
+          errors.push(...validateCommand(raw.deterministic[checkId], `deterministic.${checkId}`));
         }
       }
     }
   }
 
-  if (obj.rules !== undefined) {
-    if (!Array.isArray(obj.rules)) {
+  if (raw.secret_scan !== undefined) {
+    if (!isPlainObject(raw.secret_scan)) {
+      errors.push('secret_scan must be a mapping with patterns');
+    } else {
+      errors.push(...unknownKeys(raw.secret_scan, ['patterns'], 'secret_scan.'));
+      const patterns = raw.secret_scan.patterns;
+      if (patterns !== undefined) {
+        if (!Array.isArray(patterns)) {
+          errors.push('secret_scan.patterns must be a list of regex strings');
+        } else {
+          patterns.forEach((pattern: unknown, i: number) => {
+            if (typeof pattern !== 'string' || !pattern.trim()) {
+              errors.push(`secret_scan.patterns[${i}] must be a non-empty string`);
+            } else {
+              const reason = validateCustomSecretPattern(pattern);
+              if (reason) errors.push(`secret_scan.patterns[${i}] is unsafe: ${reason}`);
+            }
+          });
+        }
+      }
+    }
+  }
+
+  if (raw.rules !== undefined) {
+    if (!Array.isArray(raw.rules)) {
       errors.push('rules must be a list of rules (id, rule, level)');
     } else {
       const seen = new Set<string>();
-      obj.rules.forEach((rule: unknown, i: number) => {
+      raw.rules.forEach((rule: unknown, i: number) => {
         errors.push(...validateRule(rule, `rules[${i}]`));
         const id = (rule as Record<string, unknown> | null)?.id;
         if (typeof id === 'string') {
@@ -265,18 +243,19 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
     }
   }
 
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
+  return { valid: errors.length === 0, errors };
+}
+
+function defaults(): PolicyConfig {
+  return JSON.parse(JSON.stringify(DEFAULT_POLICY_CONFIG)) as PolicyConfig;
 }
 
 /**
- * Parses and validates YAML configuration text, merging it over DEFAULT_POLICY_CONFIG.
+ * Parses and validates .gitguard.yml text into the internal policy configuration.
  */
 export function parseConfig(yamlContent: string): PolicyConfig {
   if (!yamlContent || yamlContent.trim() === '') {
-    return JSON.parse(JSON.stringify(DEFAULT_POLICY_CONFIG)) as PolicyConfig;
+    return defaults();
   }
 
   // Strip leading UTF-8 Byte Order Mark (BOM) if present
@@ -291,31 +270,32 @@ export function parseConfig(yamlContent: string): PolicyConfig {
   }
 
   if (parsed === null || parsed === undefined) {
-    return JSON.parse(JSON.stringify(DEFAULT_POLICY_CONFIG)) as PolicyConfig;
-  }
-
-  if (typeof parsed !== 'object') {
-    throw new ConfigurationError('Configuration file must contain a valid YAML mapping/object');
+    return defaults();
   }
 
   const validation = validateConfig(parsed);
   if (!validation.valid) {
-    throw new ConfigurationError(`Invalid configuration schema: ${validation.errors.join('; ')}`);
+    throw new ConfigurationError(`Invalid .gitguard.yml: ${validation.errors.join('; ')}`);
   }
 
-  // Deep clone default config and merge user config
-  const clonedDefault = JSON.parse(JSON.stringify(DEFAULT_POLICY_CONFIG)) as PolicyConfig;
-  const merged = deepMerge(clonedDefault, parsed as Record<string, any>);
-  // A configured command implies the check is wanted unless explicitly disabled.
-  for (const checkId of ['test', 'lint', 'typecheck'] as const) {
-    const userCheck = (parsed as Record<string, any>).deterministic?.[checkId];
-    const check = merged.deterministic?.[checkId];
-    if (check && userCheck && userCheck.enabled === undefined && typeof check.run === 'string' && check.run.trim()) {
-      check.enabled = true;
-    }
+  const raw = parsed as Record<string, any>;
+  const config = defaults();
+  for (const checkId of COMMAND_CHECKS) {
+    const command = raw.deterministic?.[checkId];
+    if (command === undefined) continue;
+    const run = typeof command === 'string' ? command : command.run;
+    config.deterministic![checkId] = {
+      enabled: true,
+      run: run.trim(),
+      block_on_failure: true,
+      ...(typeof command === 'object' && command.timeout_ms !== undefined ? { timeout_ms: command.timeout_ms } : {}),
+    };
   }
-  merged.rules = (merged.rules ?? []).map((rule) => ({ ...rule, source: 'config' as const }));
-  return merged;
+  if (raw.secret_scan?.patterns) {
+    config.deterministic!.secret_scan!.patterns = raw.secret_scan.patterns;
+  }
+  config.rules = (raw.rules ?? []).map((rule: RuleSpec) => ({ ...rule, source: 'config' as const }));
+  return config;
 }
 
 /**

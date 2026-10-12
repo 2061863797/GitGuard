@@ -30,7 +30,8 @@ describe('Version Alignment Contract', () => {
     const codex = readJson('plugins/gitguard/.codex-plugin/plugin.json');
     expect(codex.skills).toBe('./skills/');
     const codexMcp = readJson(path.join('plugins/gitguard', codex.mcpServers));
-    expect(codexMcp.mcpServers.gitguard).toMatchObject({ command: 'node', args: ['gitguard-mcp.mjs'], cwd: 'server' });
+    expect(codexMcp.mcpServers.gitguard).toMatchObject({ command: 'node', args: ['gitguard-mcp.mjs'], cwd: 'server', tool_timeout_sec: 900 });
+    expect(claude.mcpServers.gitguard.timeout).toBe(900000);
     expect(fs.existsSync(path.resolve('plugins/gitguard/server/gitguard-mcp.mjs'))).toBe(true);
     expect(fs.existsSync(path.resolve('plugins/gitguard/skills/gitguard/SKILL.md'))).toBe(true);
   });
@@ -40,7 +41,7 @@ describe('Version Alignment Contract', () => {
     expect(codex.hooks).toBe('./hooks/hooks.json');
     const hooks = readJson('plugins/gitguard/hooks/hooks.json');
     const [group] = hooks.hooks.PreToolUse;
-    expect(group.matcher).toBe('Bash');
+    expect(group.matcher).toBe('Bash|PowerShell');
     expect(group.hooks[0].command).toContain("'server','gitguard-hook.mjs'");
     expect(group.hooks[0].command).toContain('process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT');
     expect(fs.existsSync(path.resolve('plugins/gitguard/server/gitguard-hook.mjs'))).toBe(true);

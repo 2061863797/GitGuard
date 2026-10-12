@@ -8,11 +8,20 @@
   "homepage": "https://github.com/2061863797/GitGuard",
   "repository": "https://github.com/2061863797/GitGuard",
   "license": "Apache-2.0",
-  "keywords": ["git", "pre-commit", "quality-gate", "code-review", "mcp"],
+  "keywords": [
+    "git",
+    "pre-commit",
+    "quality-gate",
+    "code-review",
+    "mcp"
+  ],
   "mcpServers": {
     "gitguard": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/server/gitguard-mcp.mjs"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/server/gitguard-mcp.mjs"
+      ],
+      "timeout": 900000
     }
   }
 }

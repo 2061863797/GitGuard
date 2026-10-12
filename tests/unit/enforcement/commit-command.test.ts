@@ -14,6 +14,9 @@ describe('findGitCommits', () => {
     ['cd /abs/repo; git -C sub commit -m x', [{ dir: '/abs/repo/sub', all: false, stagesFirst: false }]],
     ['git -c user.name=bot commit -m x', [{ dir: undefined, all: false, stagesFirst: false }]],
     ['"C:/Program Files/Git/bin/git.exe" commit -m x', [{ dir: undefined, all: false, stagesFirst: false }]],
+    ['Set-Location C:/work/repo; git commit -m x', [{ dir: 'C:/work/repo', all: false, stagesFirst: false }]],
+    ['Set-Location -Path sub; git add .; git commit -m x', [{ dir: 'sub', all: false, stagesFirst: true }]],
+    ['pushd app && git commit -m x', [{ dir: 'app', all: false, stagesFirst: false }]],
   ])('detects %s', (command, expected) => {
     expect(findGitCommits(command)).toEqual(expected);
   });

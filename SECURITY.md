@@ -35,11 +35,11 @@ GitGuard writes finding records and the last-check record used by the commit gat
 
 ### Commit gate
 
-In repositories with a GitGuard config file, the plugin's PreToolUse hook blocks an agent's shell `git commit` unless the last check covered the exact blob ids being committed, HEAD is unchanged and the last verdict was not `BLOCK`. It is a guard against forgetting the check, not a security boundary: it does not apply to commits made outside the agent's shell tool, it lets commands through when Git is unavailable, and an agent with write access could edit hook configuration or the record. The hook only reads repository state; it runs `git rev-parse`, `git diff`, `git ls-files` and `git hash-object` without `-w`.
+In repositories with a GitGuard config file, the plugin's PreToolUse hook blocks an agent's `git commit` run through the Bash or PowerShell tool unless the last check covered the exact blob ids being committed, HEAD is unchanged and the last verdict was not `BLOCK`. It is a guard against forgetting the check, not a security boundary: it does not apply to commits made outside the agent's shell tool, it lets commands through when Git is unavailable, and an agent with write access could edit hook configuration or the record. The hook only reads repository state; it runs `git rev-parse`, `git diff`, `git ls-files` and `git hash-object` without `-w`.
 
 ### Provider and configuration authority
 
-Repository `.gitguard.yml` cannot disable secret redaction, include full files in semantic context, store an API key, or select a `system_one.baseUrl` other than the official TypeSafe endpoint. Environment variables such as `TYPESAFE_BASE_URL` and programmatic SDK options are trusted caller controls, so repository-file restrictions do not automatically apply to them.
+Repository `.gitguard.yml` accepts only project commands, rules and extra secret patterns; unknown keys are rejected. Context budgets, the model, the endpoint, secret redaction and sensitive-path exclusion are built in and cannot be changed from a repository, and API keys are never read from it. Environment variables such as `TYPESAFE_BASE_URL` and programmatic SDK options are trusted caller controls, so repository-file restrictions do not automatically apply to them.
 
 The provider uses HTTPS for remote endpoints and permits explicitly configured HTTP loopback endpoints for local use. The default endpoint is TypeSafe. Keep API keys in the caller's environment or secret manager, not in repository configuration. A trusted endpoint override determines where the API key and context are sent.
 

@@ -1,5 +1,5 @@
 # GitGuard repository configuration
-# Deterministic checks run these commands; secret scanning is always on.
+# Project commands run on every check; secret scanning is always on.
 # Rules below are checked on every run in addition to the agent's own rules.
 version: 1
 
@@ -7,16 +7,12 @@ deterministic:
   test:
     run: "pnpm test"
     timeout_ms: 300000
-  lint:
-    run: "pnpm lint"
-    timeout_ms: 60000
-  typecheck:
-    run: "pnpm typecheck"
-    timeout_ms: 60000
+  lint: "pnpm lint"
+  typecheck: "pnpm typecheck"
 
 rules:
   - id: bundle_up_to_date
-    rule: "修改 src/ 下的代码时，必须同时更新打包产物 plugins/gitguard/server/gitguard-mcp.mjs"
+    rule: "修改 src/ 下的代码时，必须同时更新打包产物 plugins/gitguard/server/ 下的 gitguard-mcp.mjs 和 gitguard-hook.mjs"
     level: review
     files: ["src/**", "plugins/gitguard/server/**"]
   - id: versions_in_sync

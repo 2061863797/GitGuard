@@ -58,17 +58,10 @@ export async function spawnMcpClient(options: { serverPath?: string; withKey?: b
 }
 
 /**
- * Writes a .gitguard.yml with project commands disabled and commits it.
+ * Writes a .gitguard.yml without project commands (plus any extra YAML) and commits it.
  */
 export async function setupGitGuardRepo(fixture: GitFixture, extraYaml = ''): Promise<void> {
   await fixture.writeFile('.gitguard.yml', `version: 1
-deterministic:
-  test:
-    enabled: false
-  lint:
-    enabled: false
-  typecheck:
-    enabled: false
 ${extraYaml}`);
   await fixture.writeFile('README.md', '# e2e fixture\n');
   await fixture.stage();

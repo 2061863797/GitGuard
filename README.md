@@ -34,7 +34,11 @@ GitGuard 只负责检查：不改代码，不执行 `git add`、`commit`、`push
 /plugin install gitguard
 ```
 
-安装后会得到 `gitguard` MCP 服务、`gitguard` skill 和提交拦截 hook。skill 告诉 agent 什么时候检查、怎么写规则、怎么处理结果。
+安装后会得到 `gitguard` MCP 服务、两个 skill 和提交拦截 hook：
+- `gitguard` skill 告诉 agent 什么时候检查、怎么写规则、怎么处理结果；
+- `gitguard-setup` skill 引导 agent 帮你创建 `.gitguard.yml`。
+
+检查最长等待 15 分钟（插件里已经设置好）。
 
 ### Codex
 
@@ -42,7 +46,7 @@ GitGuard 只负责检查：不改代码，不执行 `git add`、`commit`、`push
 codex plugin marketplace add 2061863797/GitGuard
 ```
 
-重启 Codex，在插件列表里启用 `gitguard`。Codex 会要求你确认插件自带的 hook 后才运行它，提交拦截要在确认后才生效。Codex 启动插件里的 MCP 服务时可能只保留少数环境变量，所以插件显式声明了转发 `TYPESAFE_API_KEY`。这个变量本身要能被 Codex 读到，见下文[设置 API 密钥](#设置-api-密钥)。
+重启 Codex，在插件列表里启用 `gitguard`。Codex 会要求你确认插件自带的 hook 后才运行它，提交拦截要在确认后才生效。插件已经把 Codex 调用 GitGuard 的等待上限设成 15 分钟，避免项目命令跑得久时超时。Codex 启动插件里的 MCP 服务时可能只保留少数环境变量，所以插件显式声明了转发 `TYPESAFE_API_KEY`。这个变量本身要能被 Codex 读到，见下文[设置 API 密钥](#设置-api-密钥)。
 
 ### 其他 agent
 
@@ -60,7 +64,7 @@ codex plugin marketplace add 2061863797/GitGuard
 }
 ```
 
-`env` 的写法因客户端而异，按客户端的说明转发环境变量即可。如果客户端支持 SKILL.md 格式的 skill，把 [`plugins/gitguard/skills/gitguard`](plugins/gitguard/skills/gitguard/SKILL.md) 整个目录拷进它的 skills 目录。不支持 skill 的客户端仍会通过 MCP 的 server instructions 和工具描述拿到核心规则。
+`env` 的写法因客户端而异，按客户端的说明转发环境变量即可。如果客户端支持 SKILL.md 格式的 skill，把 [`plugins/gitguard/skills`](plugins/gitguard/skills) 下的两个目录拷进它的 skills 目录。如果项目命令跑得比较久，记得把客户端对 MCP 工具调用的等待上限调大。不支持 skill 的客户端仍会通过 MCP 的 server instructions 和工具描述拿到核心规则。
 
 提交拦截依赖客户端的 PreToolUse hook。如果客户端支持同样格式的 hook（命令从 stdin 读事件 JSON，退出码 2 表示拦截），可以参照 [`plugins/gitguard/hooks/hooks.json`](plugins/gitguard/hooks/hooks.json) 配置；不支持的客户端只能靠 skill 提醒 agent 自觉检查。
 
@@ -80,31 +84,48 @@ macOS / Linux 把 `export TYPESAFE_API_KEY=...` 写进 shell 配置文件即可�
 
 ## 配置 `.gitguard.yml`
 
-把 `.gitguard.yml` 放在**被检查仓库**的根目录。没有这个文件时，只做密钥扫描。
+把 `.gitguard.yml` 放在**被检查仓库**的根目录。这个文件是可选的：没有它时，GitGuard 仍会做密钥扫描，并判断 agent 传入的规则；有了它，才会跑项目命令、带上项目规则，并开启[提交拦截](#提交拦截)。
+
+**最简单的方式是让 agent 帮你创建**：对它说“帮我给这个项目配置 GitGuard”。插件里的 `gitguard-setup` skill 会引导它完成这些事：
+1. 从 `package.json`、`pyproject.toml`、`Makefile`、CI 配置等文件里找出项目实际在用的命令；
+2. 和你一起确定规则；
+3. 让你确认后再写入；
+4. 跑一次检查，确认配置能用。
+
+文件只有三部分，都是可选的：
 
 ```yaml
 version: 1
 
-# 确定性检查：写了 run 才会执行；超时单位为毫秒
+# 项目命令：每次检查都会在本机执行，失败即 BLOCK
 deterministic:
-  test:
-    run: "npm test"
-    timeout_ms: 120000
-  lint:
-    run: "npm run lint"
-  typecheck:
+  test: "npm test"              # 简写
+  lint: "npm run lint"
+  typecheck:                    # 完整写法，需要调整超时时用（毫秒，默认 60000）
     run: "npx tsc --noEmit"
+    timeout_ms: 120000
 
-# 用户的规则：每次检查都会判断改动是否违反
+# 项目规则：每次检查都会判断改动是否违反
 rules:
-  - id: no_float_money                  # 小写字母、数字、下划线
+  - id: no_float_money          # 小写字母、数字、下划线
     rule: "金额计算不能使用浮点数"
-    level: block                        # warn | review | block
-    files: ["src/billing/**"]           # 可选：改动没碰到这些文件就跳过
-    exclude: ["**/*.test.ts"]           # 可选
+    level: block                # warn | review | block
+    files: ["src/billing/**"]   # 可选：改动没碰到这些文件就跳过
+    exclude: ["**/*.test.ts"]   # 可选
+
+# 可选：在内置密钥规则之外再扫描的正则
+secret_scan:
+  patterns: ["ACME_[A-Z0-9]{32}"]
 ```
 
-写规则时注意：
+只接受这几个字段，写了其他字段（包括拼错的）会直接报错，避免配置没生效却没人发现。发给模型的上下文大小、模型名称、脱敏和敏感文件排除都使用内置的默认值，不能在仓库里修改。
+
+**项目命令**
+- 只能写一行命令；
+- 不能用 `&&`、`|`、`;`、重定向等 shell 连接符，需要组合多步时改用项目里现成的脚本；
+- 只检查你信任的仓库，因为这些命令会在本机执行。
+
+**写规则时注意**：
 
 - **直接写要求**，说清代码必须做什么或不能做什么。例如“数据库迁移必须提供回滚脚本”，不用写成问句。
 - **要具体到能从改动里判断“违反/没违反”**。例如“函数不得超过 50 行”“新增的 HTTP 接口必须校验登录态”是好规则；“代码要写得简洁”“注意安全”没有判断标准，模型只能凭感觉回答，结果不稳定。
@@ -113,15 +134,6 @@ rules:
   - `warn`：提示一下；
   - `review`：需要人判断；
   - `block`：不能提交。
-
-其他可选配置：
-
-| 配置段 | 用途 |
-|:---|:---|
-| `context` | 限制发给模型的 diff、周边代码、相关测试和仓库说明的大小 |
-| `system_one` | 模型名（默认 `jev-latest`）和超时 |
-| `deterministic.secret_scan` | 追加自定义密钥正则 `patterns`；`block_on_detection: false` 时发现密钥判为 REVIEW 而不是 BLOCK |
-| `privacy` | 追加不发送给模型的路径 `exclude_paths`；不能关闭脱敏 |
 
 完整示例见[本仓库自己的 `.gitguard.yml`](.gitguard.yml)。
 
@@ -176,7 +188,7 @@ rules:
 只在仓库根目录有 `.gitguard.yml` 时生效；没有这个文件的仓库不受任何影响。
 
 1. 每次 `check` 或 `verify`（范围是 `all`、`staged` 或 `working`）结束时，GitGuard 把这次检查覆盖的每个文件的内容指纹、当时的 HEAD 和检查结论，记到 `.git/gitguard/last-check.json`。指纹用的是 Git 的 blob ID，所以 Windows 下的换行符差异不会造成误判。
-2. agent 执行包含 `git commit` 的 shell 命令前，hook 会算出这次要提交的内容，并检查下面四项，任何一项不满足都会拦截（退出码 2），同时告诉 agent 该怎么做：
+2. agent 通过 Bash 或 PowerShell 工具执行包含 `git commit` 的命令前，hook 会算出这次要提交的内容，并检查下面四项，任何一项不满足都会拦截（退出码 2），同时告诉 agent 该怎么做：
    - 有检查记录；
    - HEAD 没变；
    - 每个要提交的文件都和检查时的内容一致；
@@ -186,7 +198,7 @@ rules:
 几种写法的处理：
 - `git commit -a`：未暂存的已跟踪改动也会提交，所以这些改动也要被检查过。
 - 同一条命令里先 `git add` / `git rm` / `git mv` 再提交：因为 hook 在整条命令执行前运行，所以要求**所有**未提交的改动都被检查过。
-- `cd 目录 && git commit`、`git -C 目录 commit`：按实际仓库判断。
+- `cd 目录 && git commit`、`Set-Location 目录; git commit`、`git -C 目录 commit`：按实际仓库判断。
 - 不在 Git 仓库里、或者 Git 出错时：hook 直接放行，不影响无关命令。
 
 这个拦截只针对 agent 通过 shell 工具发起的提交，挡的是“忘了检查”，不是安全边界：你自己在终端里提交不受影响，agent 也能通过修改 hook 配置等方式绕过（skill 里已明确禁止）。
@@ -216,7 +228,7 @@ pnpm test:bundle   # 从插件目录启动打包产物做冒烟测试
 
 ```text
 src/                     MCP 服务源码（引擎、Git 读取、上下文、检查、策略、finding）
-plugins/gitguard/        插件本体：两份清单、Codex 的 MCP 配置、skill、hook、打包产物
+plugins/gitguard/        插件本体：两份清单、Codex 的 MCP 配置、两个 skill、hook、打包产物
 .claude-plugin/          Claude Code 插件市场
 .agents/plugins/         Codex 插件市场
 ```

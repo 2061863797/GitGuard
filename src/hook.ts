@@ -1,6 +1,6 @@
 /**
  * src/hook.ts
- * PreToolUse hook entrypoint shared by the Claude Code and Codex plugins.
+ * PreToolUse hook entrypoint shared by the Claude Code and Codex plugins (Bash and PowerShell tools).
  * Reads the hook event from stdin; for an agent `git commit` in a GitGuard-enabled repository,
  * exits with code 2 (block) unless the last GitGuard check covered the content being committed
  * and was not BLOCK. Anything unexpected lets the command proceed.
@@ -10,6 +10,9 @@ import * as path from 'node:path';
 import process from 'node:process';
 import { findGitCommits } from './enforcement/commit-command.js';
 import { evaluateCommitGate } from './enforcement/commit-gate.js';
+
+/** Shell tools whose commands can run `git commit` (Codex reports its shell as Bash). */
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 
 interface PreToolUseEvent {
   tool_name?: string;
@@ -32,7 +35,7 @@ async function main(): Promise<number> {
   } catch {
     return 0;
   }
-  if (event.tool_name !== 'Bash' || typeof event.tool_input?.command !== 'string') {
+  if (!SHELL_TOOLS.has(event.tool_name ?? '') || typeof event.tool_input?.command !== 'string') {
     return 0;
   }
 

@@ -22,9 +22,9 @@ function runHook(event: unknown): { status: number | null; stderr: string } {
   return { status: result.status, stderr: result.stderr };
 }
 
-const bash = (command: string, cwd: string) => ({
+const bash = (command: string, cwd: string, toolName = 'Bash') => ({
   hook_event_name: 'PreToolUse',
-  tool_name: 'Bash',
+  tool_name: toolName,
   tool_input: { command },
   cwd,
 });
@@ -70,6 +70,13 @@ describe('GitGuard commit hook (subprocess)', () => {
     const blocked = runHook(bash('git add -A && git commit -m x', repo.repoPath));
     expect(blocked.status).toBe(2);
     expect(blocked.stderr).toContain('src/later.ts');
+  });
+
+  it('also guards commits run through the PowerShell tool', async () => {
+    await repo.writeFile('src/app.ts', 'export const a = 1;\n');
+    const blocked = runHook(bash('git add -A; git commit -m x', repo.repoPath, 'PowerShell'));
+    expect(blocked.status).toBe(2);
+    expect(runHook(bash('Get-ChildItem', repo.repoPath, 'PowerShell')).status).toBe(0);
   });
 
   it('resolves the repository from cd and git -C', async () => {
