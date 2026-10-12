@@ -1,20 +1,20 @@
 /**
  * src/core/engine.ts
  * DefaultGitGuardEngine implementing the central GitGuardEngine contract.
- * Coordinates Git context, deterministic status checkers, agent/config questions answered by
+ * Coordinates Git context, deterministic status checkers, agent/config rules judged by
  * System One, policy evaluation, and structured finding lifecycle management.
  */
 
 import * as path from 'node:path';
 import type {
-  AgentQuestion,
+  AgentRule,
   GitGuardEngine,
   CheckOptions,
   CheckResult,
   VerifyOptions,
 } from '../types/engine.js';
 import type { Finding, FindingFilter, VerificationReport } from '../types/finding.js';
-import type { PolicyConfig, DeterministicPolicyConfig, QuestionSpec } from '../types/policy.js';
+import type { PolicyConfig, DeterministicPolicyConfig, RuleSpec } from '../types/policy.js';
 import type {
   DecisionProvider,
   DeterministicConfig,
@@ -31,10 +31,10 @@ import { DefaultContextBuilder } from '../context/builder.js';
 import { DeterministicRunner } from '../analysis/deterministic/runner.js';
 import { TypeSafeSystemOneProvider } from '../analysis/semantic/typesafe-provider.js';
 import { DefaultPolicyEngine } from '../policy/engine.js';
-import { questionAppliesTo } from '../policy/rules.js';
+import { ruleAppliesTo, rulePrompt } from '../policy/rules.js';
 import { DefaultFindingManager } from '../findings/manager.js';
 import { FileFindingStore } from '../findings/store.js';
-import { loadConfig, validateQuestion } from '../policy/config.js';
+import { loadConfig, validateRule } from '../policy/config.js';
 import {
   NotAGitRepositoryError,
   ConfigurationError,
@@ -42,6 +42,7 @@ import {
   SecurityViolationError,
   InvalidGitRefError,
 } from '../types/errors.js';
+import { recordLastCheck } from '../enforcement/commit-gate.js';
 import { scanContentForSecrets, SECRET_PATTERNS, validateCustomSecretPattern, type SecretPattern } from '../analysis/deterministic/secrets.js';
 
 function normalizeRepositoryRoot(root: string): string {
@@ -50,9 +51,9 @@ function normalizeRepositoryRoot(root: string): string {
 }
 
 /**
- * Maximum number of agent-supplied questions per check.
+ * Maximum number of agent-supplied rules per check.
  */
-export const MAX_AGENT_QUESTIONS = 10;
+export const MAX_AGENT_RULES = 10;
 
 /**
  * Dependency injection options for DefaultGitGuardEngine.
@@ -68,34 +69,34 @@ export interface GitGuardEngineDependencies {
 }
 
 /**
- * Validates agent questions and combines them with config questions.
- * Previously asked agent questions (verify) are appended when their id is not taken.
+ * Validates agent rules and combines them with config rules.
+ * Previously checked agent rules (verify) are appended when their id is not taken.
  */
-export function mergeQuestions(
-  configQuestions: QuestionSpec[] = [],
-  agentQuestions: AgentQuestion[] = [],
-  storedQuestions: QuestionSpec[] = []
-): QuestionSpec[] {
-  if (agentQuestions.length > MAX_AGENT_QUESTIONS) {
-    throw new ConfigurationError(`At most ${MAX_AGENT_QUESTIONS} questions can be supplied per check.`);
+export function mergeRules(
+  configRules: RuleSpec[] = [],
+  agentRules: AgentRule[] = [],
+  storedRules: RuleSpec[] = []
+): RuleSpec[] {
+  if (agentRules.length > MAX_AGENT_RULES) {
+    throw new ConfigurationError(`At most ${MAX_AGENT_RULES} rules can be supplied per check.`);
   }
-  const merged: QuestionSpec[] = configQuestions.map((q) => ({ ...q, source: 'config' as const }));
+  const merged: RuleSpec[] = configRules.map((q) => ({ ...q, source: 'config' as const }));
   const ids = new Set(merged.map((q) => q.id));
-  agentQuestions.forEach((question, i) => {
-    const errors = validateQuestion(question, `questions[${i}]`);
+  agentRules.forEach((rule, i) => {
+    const errors = validateRule(rule, `rules[${i}]`);
     if (errors.length > 0) {
-      throw new ConfigurationError(`Invalid question: ${errors.join('; ')}`);
+      throw new ConfigurationError(`Invalid rule: ${errors.join('; ')}`);
     }
-    if (ids.has(question.id)) {
-      throw new ConfigurationError(`Question id '${question.id}' is already used by .gitguard.yml or another question.`);
+    if (ids.has(rule.id)) {
+      throw new ConfigurationError(`Rule id '${rule.id}' is already used by .gitguard.yml or another rule.`);
     }
-    ids.add(question.id);
-    merged.push({ ...question, source: 'agent' });
+    ids.add(rule.id);
+    merged.push({ ...rule, source: 'agent' });
   });
-  for (const question of storedQuestions) {
-    if (question.source === 'agent' && !ids.has(question.id)) {
-      ids.add(question.id);
-      merged.push(question);
+  for (const rule of storedRules) {
+    if (rule.source === 'agent' && !ids.has(rule.id)) {
+      ids.add(rule.id);
+      merged.push(rule);
     }
   }
   return merged;
@@ -242,13 +243,13 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
   }
 
   /**
-   * Executes the gate: deterministic checks plus agent and config questions.
+   * Executes the gate: deterministic checks plus agent and config rules.
    */
   public async check(options: CheckOptions = {}): Promise<CheckResult> {
     return this.runCheck(options, []);
   }
 
-  private async runCheck(options: CheckOptions, storedQuestions: QuestionSpec[]): Promise<CheckResult> {
+  private async runCheck(options: CheckOptions, storedRules: RuleSpec[]): Promise<CheckResult> {
     const startTime = Date.now();
     const cwd = options.cwd ?? process.cwd();
 
@@ -258,7 +259,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
     }
 
     const config = await this.resolveConfig(cwd, options.config, options.configPath);
-    const questions = mergeQuestions(config.questions, options.questions, storedQuestions);
+    const rules = mergeRules(config.rules, options.rules, storedRules);
     const scope = options.scope ?? (options.target ? (options.target.includes('..') ? 'range' : 'commit') : 'all');
     const diffOpts = buildDiffOptions(options.target, cwd);
     const taskStr = typeof options.task === 'string' ? options.task : options.task?.task;
@@ -326,12 +327,12 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       );
     }
 
-    // 3. Ask only the questions whose file filters match this changeset; no questions means no API call
-    const asked = isCleanChangeset ? [] : questions.filter((q) => questionAppliesTo(q, changedPaths));
+    // 3. Check only the rules whose file filters match this changeset; no rules means no API call
+    const asked = isCleanChangeset ? [] : rules.filter((rule) => ruleAppliesTo(rule, changedPaths));
     let semanticDecisions: SemanticDecision[] = [];
     if (asked.length > 0) {
       const provider = this.resolveProvider(config);
-      const semanticQuestions: SemanticQuestion[] = asked.map((q) => ({ id: q.id, prompt: q.question }));
+      const semanticQuestions: SemanticQuestion[] = asked.map((rule) => ({ id: rule.id, prompt: rulePrompt(rule) }));
       semanticDecisions = provider.evaluateWithReport
         ? (await provider.evaluateWithReport(semanticContext, semanticQuestions)).decisions
         : await provider.evaluate(semanticContext, semanticQuestions);
@@ -374,7 +375,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         timestamp: new Date().toISOString(),
         gitRoot: context.repository?.rootPath ?? cwd,
         headSha: context.repository?.headSha ?? '',
-        questionsAsked: asked.length,
+        rulesChecked: asked.length,
       },
     };
 
@@ -391,6 +392,19 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
         console.error(
           `[gitguard] WARNING: failed to persist ${checkResult.findings.length} finding(s) to the repository store: ${(err as Error)?.message ?? err}`
         );
+      }
+    }
+
+    // Record what this check covered so the commit hook can verify the content being committed.
+    if (this.gitAdapter instanceof GitCLIAdapter) {
+      const adapter = this.gitAdapter;
+      try {
+        const root = context.repository?.rootPath ?? (await adapter.getRepositoryRoot(cwd));
+        const blocking = checkResult.findings.filter((f) => f.status === 'block').map((f) => f.id);
+        await recordLastCheck(root, scope, checkResult.status, blocking,
+          async (args, dir) => (await adapter.executeGit(args, dir)).stdout);
+      } catch (err) {
+        console.error(`[gitguard] WARNING: failed to record the check for the commit gate: ${(err as Error)?.message ?? err}`);
       }
     }
 
@@ -496,10 +510,10 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       }
     }
 
-    // 2. Run a fresh check, re-asking the agent questions that produced the findings being verified
-    const storedQuestions = previousFindings
-      .map((finding) => finding.metadata?.question as QuestionSpec | undefined)
-      .filter((question): question is QuestionSpec => Boolean(question && question.id && question.question));
+    // 2. Run a fresh check, re-checking the agent rules that produced the findings being verified
+    const storedRules = previousFindings
+      .map((finding) => finding.metadata?.rule as RuleSpec | undefined)
+      .filter((rule): rule is RuleSpec => Boolean(rule && rule.id && rule.rule));
     const freshCheck = await this.runCheck({
       cwd,
       scope: options.scope,
@@ -507,7 +521,7 @@ export class DefaultGitGuardEngine implements GitGuardEngine {
       task: options.task,
       config: options.config,
       configPath: options.configPath,
-    }, storedQuestions);
+    }, storedRules);
 
     // 3. Resolve previous findings against fresh findings
     const basePrevious = allStored.length > 0 ? allStored : previousFindings;

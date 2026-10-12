@@ -3269,8 +3269,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path9) {
-      let input2 = path9;
+    function removeDotSegments(path10) {
+      let input2 = path10;
       const output2 = [];
       let nextSlash = -1;
       let len = 0;
@@ -3679,8 +3679,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path9 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path9 && path9 !== "/" ? path9 : void 0;
+        const path10 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path10 && path10 !== "/" ? path10 : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -7193,12 +7193,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs7, exportName) {
+    function addFormats(ajv, list, fs8, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs7[f]);
+        ajv.addFormat(f, fs8[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -7283,17 +7283,17 @@ var require_visit = __commonJS({
     visit2.BREAK = BREAK;
     visit2.SKIP = SKIP;
     visit2.REMOVE = REMOVE;
-    function visit_(key, node2, visitor, path9) {
-      const ctrl = callVisitor(key, node2, visitor, path9);
+    function visit_(key, node2, visitor, path10) {
+      const ctrl = callVisitor(key, node2, visitor, path10);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path9, ctrl);
-        return visit_(key, ctrl, visitor, path9);
+        replaceNode(key, path10, ctrl);
+        return visit_(key, ctrl, visitor, path10);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node2)) {
-          path9 = Object.freeze(path9.concat(node2));
+          path10 = Object.freeze(path10.concat(node2));
           for (let i = 0; i < node2.items.length; ++i) {
-            const ci = visit_(i, node2.items[i], visitor, path9);
+            const ci = visit_(i, node2.items[i], visitor, path10);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -7304,13 +7304,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node2)) {
-          path9 = Object.freeze(path9.concat(node2));
-          const ck = visit_("key", node2.key, visitor, path9);
+          path10 = Object.freeze(path10.concat(node2));
+          const ck = visit_("key", node2.key, visitor, path10);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node2.key = null;
-          const cv = visit_("value", node2.value, visitor, path9);
+          const cv = visit_("value", node2.value, visitor, path10);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -7331,17 +7331,17 @@ var require_visit = __commonJS({
     visitAsync.BREAK = BREAK;
     visitAsync.SKIP = SKIP;
     visitAsync.REMOVE = REMOVE;
-    async function visitAsync_(key, node2, visitor, path9) {
-      const ctrl = await callVisitor(key, node2, visitor, path9);
+    async function visitAsync_(key, node2, visitor, path10) {
+      const ctrl = await callVisitor(key, node2, visitor, path10);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path9, ctrl);
-        return visitAsync_(key, ctrl, visitor, path9);
+        replaceNode(key, path10, ctrl);
+        return visitAsync_(key, ctrl, visitor, path10);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node2)) {
-          path9 = Object.freeze(path9.concat(node2));
+          path10 = Object.freeze(path10.concat(node2));
           for (let i = 0; i < node2.items.length; ++i) {
-            const ci = await visitAsync_(i, node2.items[i], visitor, path9);
+            const ci = await visitAsync_(i, node2.items[i], visitor, path10);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -7352,13 +7352,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node2)) {
-          path9 = Object.freeze(path9.concat(node2));
-          const ck = await visitAsync_("key", node2.key, visitor, path9);
+          path10 = Object.freeze(path10.concat(node2));
+          const ck = await visitAsync_("key", node2.key, visitor, path10);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node2.key = null;
-          const cv = await visitAsync_("value", node2.value, visitor, path9);
+          const cv = await visitAsync_("value", node2.value, visitor, path10);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -7385,23 +7385,23 @@ var require_visit = __commonJS({
       }
       return visitor;
     }
-    function callVisitor(key, node2, visitor, path9) {
+    function callVisitor(key, node2, visitor, path10) {
       if (typeof visitor === "function")
-        return visitor(key, node2, path9);
+        return visitor(key, node2, path10);
       if (identity.isMap(node2))
-        return visitor.Map?.(key, node2, path9);
+        return visitor.Map?.(key, node2, path10);
       if (identity.isSeq(node2))
-        return visitor.Seq?.(key, node2, path9);
+        return visitor.Seq?.(key, node2, path10);
       if (identity.isPair(node2))
-        return visitor.Pair?.(key, node2, path9);
+        return visitor.Pair?.(key, node2, path10);
       if (identity.isScalar(node2))
-        return visitor.Scalar?.(key, node2, path9);
+        return visitor.Scalar?.(key, node2, path10);
       if (identity.isAlias(node2))
-        return visitor.Alias?.(key, node2, path9);
+        return visitor.Alias?.(key, node2, path10);
       return void 0;
     }
-    function replaceNode(key, path9, node2) {
-      const parent = path9[path9.length - 1];
+    function replaceNode(key, path10, node2) {
+      const parent = path10[path10.length - 1];
       if (identity.isCollection(parent)) {
         parent.items[key] = node2;
       } else if (identity.isPair(parent)) {
@@ -8013,10 +8013,10 @@ var require_Collection = __commonJS({
     var createNode = require_createNode();
     var identity = require_identity();
     var Node = require_Node();
-    function collectionFromPath(schema, path9, value) {
+    function collectionFromPath(schema, path10, value) {
       let v = value;
-      for (let i = path9.length - 1; i >= 0; --i) {
-        const k = path9[i];
+      for (let i = path10.length - 1; i >= 0; --i) {
+        const k = path10[i];
         if (typeof k === "number" && Number.isInteger(k) && k >= 0) {
           const a = [];
           a[k] = v;
@@ -8035,7 +8035,7 @@ var require_Collection = __commonJS({
         sourceObjects: /* @__PURE__ */ new Map()
       });
     }
-    var isEmptyPath = (path9) => path9 == null || typeof path9 === "object" && !!path9[Symbol.iterator]().next().done;
+    var isEmptyPath = (path10) => path10 == null || typeof path10 === "object" && !!path10[Symbol.iterator]().next().done;
     var Collection = class extends Node.NodeBase {
       constructor(type, schema) {
         super(type);
@@ -8065,11 +8065,11 @@ var require_Collection = __commonJS({
        * be a Pair instance or a `{ key, value }` object, which may not have a key
        * that already exists in the map.
        */
-      addIn(path9, value) {
-        if (isEmptyPath(path9))
+      addIn(path10, value) {
+        if (isEmptyPath(path10))
           this.add(value);
         else {
-          const [key, ...rest] = path9;
+          const [key, ...rest] = path10;
           const node2 = this.get(key, true);
           if (identity.isCollection(node2))
             node2.addIn(rest, value);
@@ -8083,8 +8083,8 @@ var require_Collection = __commonJS({
        * Removes a value from the collection.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path9) {
-        const [key, ...rest] = path9;
+      deleteIn(path10) {
+        const [key, ...rest] = path10;
         if (rest.length === 0)
           return this.delete(key);
         const node2 = this.get(key, true);
@@ -8098,8 +8098,8 @@ var require_Collection = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path9, keepScalar) {
-        const [key, ...rest] = path9;
+      getIn(path10, keepScalar) {
+        const [key, ...rest] = path10;
         const node2 = this.get(key, true);
         if (rest.length === 0)
           return !keepScalar && identity.isScalar(node2) ? node2.value : node2;
@@ -8117,8 +8117,8 @@ var require_Collection = __commonJS({
       /**
        * Checks if the collection includes a value with the key `key`.
        */
-      hasIn(path9) {
-        const [key, ...rest] = path9;
+      hasIn(path10) {
+        const [key, ...rest] = path10;
         if (rest.length === 0)
           return this.has(key);
         const node2 = this.get(key, true);
@@ -8128,8 +8128,8 @@ var require_Collection = __commonJS({
        * Sets a value in this collection. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path9, value) {
-        const [key, ...rest] = path9;
+      setIn(path10, value) {
+        const [key, ...rest] = path10;
         if (rest.length === 0) {
           this.set(key, value);
         } else {
@@ -10644,9 +10644,9 @@ var require_Document = __commonJS({
           this.contents.add(value);
       }
       /** Adds a value to the document. */
-      addIn(path9, value) {
+      addIn(path10, value) {
         if (assertCollection(this.contents))
-          this.contents.addIn(path9, value);
+          this.contents.addIn(path10, value);
       }
       /**
        * Create a new `Alias` node, ensuring that the target `node` has the required anchor.
@@ -10721,14 +10721,14 @@ var require_Document = __commonJS({
        * Removes a value from the document.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path9) {
-        if (Collection.isEmptyPath(path9)) {
+      deleteIn(path10) {
+        if (Collection.isEmptyPath(path10)) {
           if (this.contents == null)
             return false;
           this.contents = null;
           return true;
         }
-        return assertCollection(this.contents) ? this.contents.deleteIn(path9) : false;
+        return assertCollection(this.contents) ? this.contents.deleteIn(path10) : false;
       }
       /**
        * Returns item at `key`, or `undefined` if not found. By default unwraps
@@ -10743,10 +10743,10 @@ var require_Document = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path9, keepScalar) {
-        if (Collection.isEmptyPath(path9))
+      getIn(path10, keepScalar) {
+        if (Collection.isEmptyPath(path10))
           return !keepScalar && identity.isScalar(this.contents) ? this.contents.value : this.contents;
-        return identity.isCollection(this.contents) ? this.contents.getIn(path9, keepScalar) : void 0;
+        return identity.isCollection(this.contents) ? this.contents.getIn(path10, keepScalar) : void 0;
       }
       /**
        * Checks if the document includes a value with the key `key`.
@@ -10757,10 +10757,10 @@ var require_Document = __commonJS({
       /**
        * Checks if the document includes a value at `path`.
        */
-      hasIn(path9) {
-        if (Collection.isEmptyPath(path9))
+      hasIn(path10) {
+        if (Collection.isEmptyPath(path10))
           return this.contents !== void 0;
-        return identity.isCollection(this.contents) ? this.contents.hasIn(path9) : false;
+        return identity.isCollection(this.contents) ? this.contents.hasIn(path10) : false;
       }
       /**
        * Sets a value in this document. For `!!set`, `value` needs to be a
@@ -10777,13 +10777,13 @@ var require_Document = __commonJS({
        * Sets a value in this document. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path9, value) {
-        if (Collection.isEmptyPath(path9)) {
+      setIn(path10, value) {
+        if (Collection.isEmptyPath(path10)) {
           this.contents = value;
         } else if (this.contents == null) {
-          this.contents = Collection.collectionFromPath(this.schema, Array.from(path9), value);
+          this.contents = Collection.collectionFromPath(this.schema, Array.from(path10), value);
         } else if (assertCollection(this.contents)) {
-          this.contents.setIn(path9, value);
+          this.contents.setIn(path10, value);
         }
       }
       /**
@@ -12744,9 +12744,9 @@ var require_cst_visit = __commonJS({
     visit2.BREAK = BREAK;
     visit2.SKIP = SKIP;
     visit2.REMOVE = REMOVE;
-    visit2.itemAtPath = (cst, path9) => {
+    visit2.itemAtPath = (cst, path10) => {
       let item = cst;
-      for (const [field, index] of path9) {
+      for (const [field, index] of path10) {
         const tok = item?.[field];
         if (tok && "items" in tok) {
           item = tok.items[index];
@@ -12755,23 +12755,23 @@ var require_cst_visit = __commonJS({
       }
       return item;
     };
-    visit2.parentCollection = (cst, path9) => {
-      const parent = visit2.itemAtPath(cst, path9.slice(0, -1));
-      const field = path9[path9.length - 1][0];
+    visit2.parentCollection = (cst, path10) => {
+      const parent = visit2.itemAtPath(cst, path10.slice(0, -1));
+      const field = path10[path10.length - 1][0];
       const coll = parent?.[field];
       if (coll && "items" in coll)
         return coll;
       throw new Error("Parent collection not found");
     };
-    function _visit(path9, item, visitor) {
-      let ctrl = visitor(item, path9);
+    function _visit(path10, item, visitor) {
+      let ctrl = visitor(item, path10);
       if (typeof ctrl === "symbol")
         return ctrl;
       for (const field of ["key", "value"]) {
         const token = item[field];
         if (token && "items" in token) {
           for (let i = 0; i < token.items.length; ++i) {
-            const ci = _visit(Object.freeze(path9.concat([[field, i]])), token.items[i], visitor);
+            const ci = _visit(Object.freeze(path10.concat([[field, i]])), token.items[i], visitor);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -12782,10 +12782,10 @@ var require_cst_visit = __commonJS({
             }
           }
           if (typeof ctrl === "function" && field === "key")
-            ctrl = ctrl(item, path9);
+            ctrl = ctrl(item, path10);
         }
       }
-      return typeof ctrl === "function" ? ctrl(item, path9) : ctrl;
+      return typeof ctrl === "function" ? ctrl(item, path10) : ctrl;
     }
     exports.visit = visit2;
   }
@@ -14087,14 +14087,14 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs7 = this.flowScalar(this.type);
+              const fs8 = this.flowScalar(this.type);
               if (atNextItem || it.value) {
-                map2.items.push({ start, key: fs7, sep: [] });
+                map2.items.push({ start, key: fs8, sep: [] });
                 this.onKeyLine = true;
               } else if (it.sep) {
-                this.stack.push(fs7);
+                this.stack.push(fs8);
               } else {
-                Object.assign(it, { key: fs7, sep: [] });
+                Object.assign(it, { key: fs8, sep: [] });
                 this.onKeyLine = true;
               }
               return;
@@ -14222,13 +14222,13 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs7 = this.flowScalar(this.type);
+              const fs8 = this.flowScalar(this.type);
               if (!it || it.value)
-                fc.items.push({ start: [], key: fs7, sep: [] });
+                fc.items.push({ start: [], key: fs8, sep: [] });
               else if (it.sep)
-                this.stack.push(fs7);
+                this.stack.push(fs8);
               else
-                Object.assign(it, { key: fs7, sep: [] });
+                Object.assign(it, { key: fs8, sep: [] });
               return;
             }
             case "flow-map-end":
@@ -15092,10 +15092,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path9) {
-  if (!path9)
+function getElementAtPath(obj, path10) {
+  if (!path10)
     return obj;
-  return path9.reduce((acc, key) => acc?.[key], obj);
+  return path10.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -15435,11 +15435,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path9, issues) {
+function prefixIssues(path10, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path9);
+    iss.path.unshift(path10);
     return iss;
   });
 }
@@ -15889,16 +15889,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error63, path9 = []) => {
+  const processError = (error63, path10 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else {
-        const fullpath = [...path9, ...issue2.path];
+        const fullpath = [...path10, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -15937,17 +15937,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error63, path9 = []) => {
+  const processError = (error63, path10 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else {
-        const fullpath = [...path9, ...issue2.path];
+        const fullpath = [...path10, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -15986,8 +15986,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path9 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path9) {
+  const path10 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path10) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -33570,13 +33570,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path9 = ref.slice(1).split("/").filter(Boolean);
-  if (path9.length === 0) {
+  const path10 = ref.slice(1).split("/").filter(Boolean);
+  if (path10.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path9[0] === defsKey) {
-    const key = path9[1] === void 0 ? void 0 : decodeJSONPointerSegment(path9[1]);
+  if (path10[0] === defsKey) {
+    const key = path10[1] === void 0 ? void 0 : decodeJSONPointerSegment(path10[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -37570,7 +37570,7 @@ var StdioServerTransport = class {
 import { format } from "node:util";
 
 // src/core/engine.ts
-import * as path7 from "node:path";
+import * as path8 from "node:path";
 
 // src/git/adapter.ts
 import { execFile } from "node:child_process";
@@ -37629,9 +37629,9 @@ var GitGuardError = class extends Error {
   }
 };
 var NotAGitRepositoryError = class extends GitGuardError {
-  constructor(path9) {
+  constructor(path10) {
     super(
-      path9 ? `Directory is not a Git repository: ${path9}` : "Current working directory is not a Git repository",
+      path10 ? `Directory is not a Git repository: ${path10}` : "Current working directory is not a Git repository",
       "NOT_A_GIT_REPOSITORY",
       3
     );
@@ -37979,7 +37979,8 @@ var ALLOWED_GIT_SUBCOMMANDS = /* @__PURE__ */ new Set([
   "cat-file",
   "symbolic-ref",
   "merge-base",
-  "version"
+  "version",
+  "hash-object"
 ]);
 var FORBIDDEN_GIT_COMMANDS = /* @__PURE__ */ new Set([
   "add",
@@ -38048,6 +38049,9 @@ var GitCLIAdapter = class {
       (arg) => arg === "--output" || arg.startsWith("--output=") || arg === "--ext-diff" || arg === "--textconv"
     )) {
       throw new ForbiddenGitOperationError(`${subcommand} write or external-diff option`);
+    }
+    if (subcommand === "hash-object" && optionArgs.some((arg) => arg === "-w" || arg === "--stdin-paths" || arg.startsWith("--literally"))) {
+      throw new ForbiddenGitOperationError("hash-object write option");
     }
     if (subcommand === "cat-file" && optionArgs.some((arg) => arg === "--filters" || arg === "--textconv")) {
       throw new ForbiddenGitOperationError("cat-file external filter option");
@@ -38170,7 +38174,7 @@ var GitCLIAdapter = class {
     const targetCwd = cwd || this.defaultCwd || process.cwd();
     const rootPath = await this.getRepositoryRoot(targetCwd);
     const currentBranch = await this.getCurrentBranch(targetCwd);
-    const headSha = await this.getHeadSha(targetCwd);
+    const headSha2 = await this.getHeadSha(targetCwd);
     const res = await this.executeGit(["status", "--porcelain=v1", "-z", "-uall"], targetCwd);
     const entries = res.stdout.split("\0");
     const stagedFiles = [];
@@ -38201,7 +38205,7 @@ var GitCLIAdapter = class {
       isRepo: true,
       rootPath,
       currentBranch,
-      headSha,
+      headSha: headSha2,
       isClean,
       stagedFiles,
       unstagedFiles,
@@ -38214,12 +38218,12 @@ var GitCLIAdapter = class {
   async getDiff(scope, options) {
     const targetCwd = options?.cwd || this.defaultCwd || process.cwd();
     await this.ensureRepo(targetCwd);
-    const headSha = await this.getHeadSha(targetCwd);
+    const headSha2 = await this.getHeadSha(targetCwd);
     const args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
     let diffText = "";
     switch (scope) {
       case "staged": {
-        if (!headSha) {
+        if (!headSha2) {
           args.push("--cached", GIT_EMPTY_TREE_SHA);
         } else {
           args.push("--cached");
@@ -38231,7 +38235,7 @@ var GitCLIAdapter = class {
         break;
       }
       case "all": {
-        if (!headSha) {
+        if (!headSha2) {
           const staged = await this.getDiff("staged", options);
           const working = await this.getDiff("working-tree", options);
           return [staged, working].filter(Boolean).join("\n");
@@ -40701,7 +40705,7 @@ var DefaultFindingManager = class {
         fingerprint,
         createdAt: timestamp,
         provenance,
-        metadata: match.question ? { question: match.question } : void 0
+        metadata: match.rule ? { rule: match.rule } : void 0
       };
       this.findingsStore.set(finding.id, finding);
       createdFindings.push(finding);
@@ -40988,19 +40992,19 @@ function filterMatchingFiles(files, includeGlobs, excludeGlobs) {
   }
   return matched;
 }
-var QUESTION_YES_THRESHOLD = 0.5;
+var VIOLATION_THRESHOLD = 0.5;
 var LEVEL_SEVERITY = {
   warn: "WARN",
   review: "ERROR",
   block: "CRITICAL"
 };
-function questionAppliesTo(question, changedFiles) {
-  if (!question.files || question.files.length === 0) {
+function ruleAppliesTo(rule, changedFiles) {
+  if (!rule.files || rule.files.length === 0) {
     const normalized = normalizeAffectedFiles(changedFiles);
-    const remaining = question.exclude?.length ? normalized.filter((file2) => !question.exclude.some((pattern) => matchesGlob(file2, pattern))) : normalized;
+    const remaining = rule.exclude?.length ? normalized.filter((file2) => !rule.exclude.some((pattern) => matchesGlob(file2, pattern))) : normalized;
     return remaining.length > 0 ? remaining : null;
   }
-  const matched = filterMatchingFiles(changedFiles, question.files, question.exclude);
+  const matched = filterMatchingFiles(changedFiles, rule.files, rule.exclude);
   return matched.length > 0 ? matched : null;
 }
 function evaluateDeterministicCheck(result, policy, context) {
@@ -41115,18 +41119,22 @@ function evaluateDeterministicCheck(result, policy, context) {
   }
   return null;
 }
-function evaluateQuestion(decision, question, affectedFiles) {
-  if (decision.probability < QUESTION_YES_THRESHOLD) {
+function rulePrompt(rule) {
+  return `Does this code change violate the following rule? Answer yes only if the changed code breaks it.
+Rule: ${rule.rule}`;
+}
+function evaluateRule(decision, rule, affectedFiles) {
+  if (decision.probability < VIOLATION_THRESHOLD) {
     return null;
   }
   const evidence = [
     {
-      type: "semantic_answer",
-      ruleName: question.id,
-      message: decision.rationale || `System One answered yes to: ${question.question}`,
+      type: "rule_violation",
+      ruleName: rule.id,
+      message: decision.rationale || `System One judged that the change violates: ${rule.rule}`,
       details: {
-        question: question.question,
-        source: question.source,
+        rule: rule.rule,
+        source: rule.source,
         probability: decision.probability,
         confidence: decision.confidence,
         provider: decision.provider
@@ -41134,18 +41142,18 @@ function evaluateQuestion(decision, question, affectedFiles) {
     }
   ];
   return {
-    ruleId: question.id,
+    ruleId: rule.id,
     source: "semantic",
-    status: question.level,
-    severity: LEVEL_SEVERITY[question.level],
-    message: decision.rationale ? `${question.question} \u2014 ${decision.rationale}` : `${question.question} (yes, p=${decision.probability.toFixed(2)})`,
+    status: rule.level,
+    severity: LEVEL_SEVERITY[rule.level],
+    message: decision.rationale ? `Violates rule "${rule.rule}": ${decision.rationale}` : `Violates rule "${rule.rule}" (p=${decision.probability.toFixed(2)})`,
     probability: decision.probability,
     affectedFiles,
     evidence,
     expectedEvidence: [
-      `Change the code so the answer to "${question.question}" becomes no, then run verify with this finding ID.`
+      `Change the code so it follows the rule "${rule.rule}", then run verify with this finding ID.`
     ],
-    question
+    rule
   };
 }
 
@@ -41163,9 +41171,9 @@ var DefaultPolicyEngine = class {
     return synthesizeGateVerdict(items);
   }
   /**
-   * Evaluates deterministic results and answers to the asked questions.
+   * Evaluates deterministic results and System One's judgments of the checked rules.
    */
-  evaluate(deterministicResults, semanticDecisions, questions, policy, context) {
+  evaluate(deterministicResults, semanticDecisions, rules, policy, context) {
     const ruleMatches = [];
     const passedRulesSet = /* @__PURE__ */ new Set();
     const violatedRulesSet = /* @__PURE__ */ new Set();
@@ -41180,18 +41188,18 @@ var DefaultPolicyEngine = class {
       }
     }
     const decisionMap = new Map((semanticDecisions || []).map((decision) => [decision.id, decision]));
-    for (const question of questions || []) {
-      const decision = decisionMap.get(question.id);
-      const affectedFiles = questionAppliesTo(question, changedFiles);
+    for (const rule of rules || []) {
+      const decision = decisionMap.get(rule.id);
+      const affectedFiles = ruleAppliesTo(rule, changedFiles);
       if (!decision || !affectedFiles) {
         continue;
       }
-      const match = evaluateQuestion(decision, question, affectedFiles);
+      const match = evaluateRule(decision, rule, affectedFiles);
       if (match) {
         ruleMatches.push(match);
-        violatedRulesSet.add(question.id);
+        violatedRulesSet.add(rule.id);
       } else {
-        passedRulesSet.add(question.id);
+        passedRulesSet.add(rule.id);
       }
     }
     for (const violatedId of violatedRulesSet) {
@@ -41201,7 +41209,7 @@ var DefaultPolicyEngine = class {
     const findings = ruleMatches.length > 0 ? this.findingManager.createFindings(ruleMatches, context) : [];
     let summary;
     if (verdict === "PASS") {
-      summary = !context.diff?.raw?.trim() && changedFiles.length === 0 ? "Clean changeset with zero modifications. Gate verdict: PASS." : `Gate verdict: PASS. All ${passedRulesSet.size} evaluated check(s) and question(s) passed.`;
+      summary = !context.diff?.raw?.trim() && changedFiles.length === 0 ? "Clean changeset with zero modifications. Gate verdict: PASS." : `Gate verdict: PASS. All ${passedRulesSet.size} evaluated check(s) and rule(s) passed.`;
     } else {
       const violatedList = Array.from(violatedRulesSet).join(", ");
       summary = `Gate verdict: ${verdict}. Detected ${ruleMatches.length} issue(s) [${violatedList}].`;
@@ -41248,7 +41256,7 @@ var DEFAULT_POLICY_CONFIG = {
       block_on_detection: true
     }
   },
-  questions: [],
+  rules: [],
   privacy: {
     redact_secrets: true,
     include_full_files: false,
@@ -41302,30 +41310,24 @@ function containsUnsafeKeys(value) {
   }
   return keys.some((k) => containsUnsafeKeys(obj[k]));
 }
-var REMOVED_CONFIG_KEYS = [
-  ["rules", "Built-in semantic rules no longer exist; express each concern as an entry under questions."],
-  ["custom_rules", "Move each rule to questions with id, question, level (warn|review|block) and optional files/exclude."],
-  ["gate", "Verdicts are fixed (BLOCK stops a commit) and semantic caching was removed; delete this section."],
-  ["system_one.provider", "Only the TypeSafe provider remains and offline/mock mode was removed; delete this field."]
-];
-var QUESTION_ID_PATTERN = /^[a-z0-9_]{1,64}$/;
-var QUESTION_LEVELS = ["warn", "review", "block"];
+var RULE_ID_PATTERN = /^[a-z0-9_]{1,64}$/;
+var RULE_LEVELS = ["warn", "review", "block"];
 function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim().length > 0);
 }
-function validateQuestion(raw, label) {
+function validateRule(raw, label) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return [`${label} must be an object`];
   }
   const q = raw;
   const errors = [];
-  if (typeof q.id !== "string" || !QUESTION_ID_PATTERN.test(q.id)) {
+  if (typeof q.id !== "string" || !RULE_ID_PATTERN.test(q.id)) {
     errors.push(`${label}.id must match [a-z0-9_] and be at most 64 characters`);
   }
-  if (typeof q.question !== "string" || !q.question.trim() || q.question.length > 1e3) {
-    errors.push(`${label}.question must be a non-empty string of at most 1000 characters`);
+  if (typeof q.rule !== "string" || !q.rule.trim() || q.rule.length > 1e3) {
+    errors.push(`${label}.rule must be a non-empty string of at most 1000 characters`);
   }
-  if (!QUESTION_LEVELS.includes(q.level)) {
+  if (!RULE_LEVELS.includes(q.level)) {
     errors.push(`${label}.level must be one of warn, review, block`);
   }
   if (q.files !== void 0 && !isStringArray(q.files)) {
@@ -41335,8 +41337,8 @@ function validateQuestion(raw, label) {
     errors.push(`${label}.exclude must be an array of glob strings`);
   }
   for (const key of Object.keys(q)) {
-    if (!["id", "question", "level", "files", "exclude"].includes(key)) {
-      errors.push(`${label}.${key} is not a supported question field`);
+    if (!["id", "rule", "level", "files", "exclude"].includes(key)) {
+      errors.push(`${label}.${key} is not a supported rule field`);
     }
   }
   return errors;
@@ -41381,13 +41383,6 @@ function validateConfig(raw) {
       errors.push("Repository configuration cannot enable privacy.include_full_files");
     }
   }
-  for (const [key, hint] of REMOVED_CONFIG_KEYS) {
-    const [section, field] = key.split(".");
-    const present = field ? obj[section] && typeof obj[section] === "object" && Object.hasOwn(obj[section], field) : Object.hasOwn(obj, section);
-    if (present) {
-      errors.push(`'${key}' was removed in GitGuard 0.3. ${hint}`);
-    }
-  }
   if (obj.deterministic?.secret_scan?.patterns !== void 0) {
     if (!Array.isArray(obj.deterministic.secret_scan.patterns)) {
       errors.push("deterministic.secret_scan.patterns must be an array of regex strings");
@@ -41405,16 +41400,16 @@ function validateConfig(raw) {
       }
     }
   }
-  if (obj.questions !== void 0) {
-    if (!Array.isArray(obj.questions)) {
-      errors.push("questions must be an array");
+  if (obj.rules !== void 0) {
+    if (!Array.isArray(obj.rules)) {
+      errors.push("rules must be a list of rules (id, rule, level)");
     } else {
       const seen = /* @__PURE__ */ new Set();
-      obj.questions.forEach((question, i) => {
-        errors.push(...validateQuestion(question, `questions[${i}]`));
-        const id = question?.id;
+      obj.rules.forEach((rule, i) => {
+        errors.push(...validateRule(rule, `rules[${i}]`));
+        const id = rule?.id;
         if (typeof id === "string") {
-          if (seen.has(id)) errors.push(`questions[${i}].id '${id}' is duplicated`);
+          if (seen.has(id)) errors.push(`rules[${i}].id '${id}' is duplicated`);
           seen.add(id);
         }
       });
@@ -41455,7 +41450,7 @@ function parseConfig(yamlContent) {
       check2.enabled = true;
     }
   }
-  merged.questions = (merged.questions ?? []).map((question) => ({ ...question, source: "config" }));
+  merged.rules = (merged.rules ?? []).map((rule) => ({ ...rule, source: "config" }));
   return merged;
 }
 async function loadConfig(configPath, cwd = process.cwd()) {
@@ -41517,33 +41512,118 @@ async function loadConfig(configPath, cwd = process.cwd()) {
   return JSON.parse(JSON.stringify(DEFAULT_POLICY_CONFIG));
 }
 
+// src/enforcement/commit-gate.ts
+import * as fs7 from "node:fs";
+import * as path7 from "node:path";
+var ZERO_SHA = "0".repeat(40);
+var RECORD_FILE = "last-check.json";
+function defaultGitExec() {
+  const adapter = new GitCLIAdapter();
+  return async (args, cwd) => (await adapter.executeGit(args, cwd)).stdout;
+}
+function splitZ(output2) {
+  return output2.split("\0").filter(Boolean);
+}
+async function headSha(exec, root) {
+  try {
+    return (await exec(["rev-parse", "--verify", "--quiet", "HEAD"], root)).trim();
+  } catch {
+    return "";
+  }
+}
+async function stagedBlobs(exec, root, head) {
+  const args = ["diff", "--cached", "--raw", "-z", "--no-abbrev", "--no-renames"];
+  if (!head) args.push("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+  const fields = splitZ(await exec(args, root));
+  const files = {};
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const meta3 = fields[i].split(" ");
+    files[fields[i + 1]] = meta3[3] ?? ZERO_SHA;
+  }
+  return files;
+}
+async function workingBlobs(exec, root, paths) {
+  const files = {};
+  const existing = [];
+  for (const p of new Set(paths)) {
+    if (fs7.existsSync(path7.join(root, p))) existing.push(p);
+    else files[p] = ZERO_SHA;
+  }
+  for (let i = 0; i < existing.length; i += 100) {
+    const batch = existing.slice(i, i + 100);
+    const shas = (await exec(["hash-object", "--", ...batch], root)).split(/\r?\n/).filter(Boolean);
+    batch.forEach((p, index) => {
+      files[p] = shas[index] ?? ZERO_SHA;
+    });
+  }
+  return files;
+}
+async function collectBlobs(exec, root, mode) {
+  const head = await headSha(exec, root);
+  if (mode === "staged") return stagedBlobs(exec, root, head);
+  const paths = [];
+  if (mode === "working") {
+    paths.push(...splitZ(await exec(["diff", "--name-only", "-z", "--no-renames"], root)));
+  } else if (head) {
+    paths.push(...splitZ(await exec(["diff", "HEAD", "--name-only", "-z", "--no-renames"], root)));
+  } else {
+    paths.push(...Object.keys(await stagedBlobs(exec, root, head)));
+    paths.push(...splitZ(await exec(["diff", "--name-only", "-z", "--no-renames"], root)));
+  }
+  if (mode !== "tracked") {
+    paths.push(...splitZ(await exec(["ls-files", "--others", "--exclude-standard", "-z"], root)));
+  }
+  return workingBlobs(exec, root, paths);
+}
+function recordPath(root) {
+  return path7.join(resolveGitDir(root), "gitguard", RECORD_FILE);
+}
+async function recordLastCheck(root, scope, status, blockingFindings, exec = defaultGitExec()) {
+  const mode = scope === "staged" ? "staged" : scope === "all" ? "all" : scope === "working" || scope === "working-tree" ? "working" : void 0;
+  if (!mode) return false;
+  const record2 = {
+    version: 1,
+    status,
+    headSha: await headSha(exec, root),
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    blockingFindings,
+    files: await collectBlobs(exec, root, mode)
+  };
+  const target = recordPath(root);
+  fs7.mkdirSync(path7.dirname(target), { recursive: true });
+  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  fs7.writeFileSync(temp, JSON.stringify(record2, null, 2), "utf8");
+  fs7.renameSync(temp, target);
+  return true;
+}
+
 // src/core/engine.ts
 function normalizeRepositoryRoot(root) {
-  const resolved = path7.resolve(root);
+  const resolved = path8.resolve(root);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
-var MAX_AGENT_QUESTIONS = 10;
-function mergeQuestions(configQuestions = [], agentQuestions = [], storedQuestions = []) {
-  if (agentQuestions.length > MAX_AGENT_QUESTIONS) {
-    throw new ConfigurationError(`At most ${MAX_AGENT_QUESTIONS} questions can be supplied per check.`);
+var MAX_AGENT_RULES = 10;
+function mergeRules(configRules = [], agentRules = [], storedRules = []) {
+  if (agentRules.length > MAX_AGENT_RULES) {
+    throw new ConfigurationError(`At most ${MAX_AGENT_RULES} rules can be supplied per check.`);
   }
-  const merged = configQuestions.map((q) => ({ ...q, source: "config" }));
+  const merged = configRules.map((q) => ({ ...q, source: "config" }));
   const ids = new Set(merged.map((q) => q.id));
-  agentQuestions.forEach((question, i) => {
-    const errors = validateQuestion(question, `questions[${i}]`);
+  agentRules.forEach((rule, i) => {
+    const errors = validateRule(rule, `rules[${i}]`);
     if (errors.length > 0) {
-      throw new ConfigurationError(`Invalid question: ${errors.join("; ")}`);
+      throw new ConfigurationError(`Invalid rule: ${errors.join("; ")}`);
     }
-    if (ids.has(question.id)) {
-      throw new ConfigurationError(`Question id '${question.id}' is already used by .gitguard.yml or another question.`);
+    if (ids.has(rule.id)) {
+      throw new ConfigurationError(`Rule id '${rule.id}' is already used by .gitguard.yml or another rule.`);
     }
-    ids.add(question.id);
-    merged.push({ ...question, source: "agent" });
+    ids.add(rule.id);
+    merged.push({ ...rule, source: "agent" });
   });
-  for (const question of storedQuestions) {
-    if (question.source === "agent" && !ids.has(question.id)) {
-      ids.add(question.id);
-      merged.push(question);
+  for (const rule of storedRules) {
+    if (rule.source === "agent" && !ids.has(rule.id)) {
+      ids.add(rule.id);
+      merged.push(rule);
     }
   }
   return merged;
@@ -41664,12 +41744,12 @@ var DefaultGitGuardEngine = class {
     });
   }
   /**
-   * Executes the gate: deterministic checks plus agent and config questions.
+   * Executes the gate: deterministic checks plus agent and config rules.
    */
   async check(options = {}) {
     return this.runCheck(options, []);
   }
-  async runCheck(options, storedQuestions) {
+  async runCheck(options, storedRules) {
     const startTime = Date.now();
     const cwd = options.cwd ?? process.cwd();
     const isGit = await this.gitAdapter.isGitRepository(cwd);
@@ -41677,7 +41757,7 @@ var DefaultGitGuardEngine = class {
       throw new NotAGitRepositoryError(cwd);
     }
     const config2 = await this.resolveConfig(cwd, options.config, options.configPath);
-    const questions = mergeQuestions(config2.questions, options.questions, storedQuestions);
+    const rules = mergeRules(config2.rules, options.rules, storedRules);
     const scope = options.scope ?? (options.target ? options.target.includes("..") ? "range" : "commit" : "all");
     const diffOpts = buildDiffOptions(options.target, cwd);
     const taskStr = typeof options.task === "string" ? options.task : options.task?.task;
@@ -41735,11 +41815,11 @@ var DefaultGitGuardEngine = class {
         toDeterministicRunnerConfig(config2.deterministic)
       );
     }
-    const asked = isCleanChangeset ? [] : questions.filter((q) => questionAppliesTo(q, changedPaths));
+    const asked = isCleanChangeset ? [] : rules.filter((rule) => ruleAppliesTo(rule, changedPaths));
     let semanticDecisions = [];
     if (asked.length > 0) {
       const provider = this.resolveProvider(config2);
-      const semanticQuestions = asked.map((q) => ({ id: q.id, prompt: q.question }));
+      const semanticQuestions = asked.map((rule) => ({ id: rule.id, prompt: rulePrompt(rule) }));
       semanticDecisions = provider.evaluateWithReport ? (await provider.evaluateWithReport(semanticContext, semanticQuestions)).decisions : await provider.evaluate(semanticContext, semanticQuestions);
       const answered = new Set(semanticDecisions.map((d) => d.id));
       const missing = asked.filter((q) => !answered.has(q.id)).map((q) => q.id);
@@ -41776,7 +41856,7 @@ var DefaultGitGuardEngine = class {
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         gitRoot: context.repository?.rootPath ?? cwd,
         headSha: context.repository?.headSha ?? "",
-        questionsAsked: asked.length
+        rulesChecked: asked.length
       }
     };
     if (checkResult.findings.length > 0) {
@@ -41790,6 +41870,22 @@ var DefaultGitGuardEngine = class {
         console.error(
           `[gitguard] WARNING: failed to persist ${checkResult.findings.length} finding(s) to the repository store: ${err?.message ?? err}`
         );
+      }
+    }
+    if (this.gitAdapter instanceof GitCLIAdapter) {
+      const adapter = this.gitAdapter;
+      try {
+        const root = context.repository?.rootPath ?? await adapter.getRepositoryRoot(cwd);
+        const blocking = checkResult.findings.filter((f) => f.status === "block").map((f) => f.id);
+        await recordLastCheck(
+          root,
+          scope,
+          checkResult.status,
+          blocking,
+          async (args, dir) => (await adapter.executeGit(args, dir)).stdout
+        );
+      } catch (err) {
+        console.error(`[gitguard] WARNING: failed to record the check for the commit gate: ${err?.message ?? err}`);
       }
     }
     return checkResult;
@@ -41878,7 +41974,7 @@ var DefaultGitGuardEngine = class {
         previousFindings = previousFindings.filter(matchesCurrentRepository);
       }
     }
-    const storedQuestions = previousFindings.map((finding) => finding.metadata?.question).filter((question) => Boolean(question && question.id && question.question));
+    const storedRules = previousFindings.map((finding) => finding.metadata?.rule).filter((rule) => Boolean(rule && rule.id && rule.rule));
     const freshCheck = await this.runCheck({
       cwd,
       scope: options.scope,
@@ -41886,7 +41982,7 @@ var DefaultGitGuardEngine = class {
       task: options.task,
       config: options.config,
       configPath: options.configPath
-    }, storedQuestions);
+    }, storedRules);
     const basePrevious = allStored.length > 0 ? allStored : previousFindings;
     const report = this.findingManager.resolveFindings(
       basePrevious,
@@ -42055,17 +42151,20 @@ var DefaultGitGuardEngine = class {
 };
 
 // src/interfaces/mcp/tools.ts
-import * as path8 from "node:path";
+import * as path9 from "node:path";
 var GITGUARD_SERVER_INSTRUCTIONS = [
   "GitGuard checks code changes in a Git repository before they are committed.",
   "Call check after finishing a task and before committing; call verify with the finding IDs after fixing them.",
   "check runs secret scanning plus the test/lint/typecheck commands configured in the repository .gitguard.yml,",
-  "and asks TypeSafe System One yes/no questions: questions you pass in, plus questions from .gitguard.yml.",
-  'Write 3-6 questions specific to this task and project, one concern each, phrased so that "yes" means a problem exists',
-  '(e.g. "Does this change compute money with floating point?"). level is what a "yes" means: warn (mention it),',
-  "review (the user must decide) or block (must not be committed). Questions require TYPESAFE_API_KEY; without questions no key is needed.",
+  "and has TypeSafe System One judge whether the change violates rules: rules you pass in, plus rules from .gitguard.yml.",
+  "Write 3-6 rules specific to this task and project, one concern each, stated plainly as what the code must or must not do",
+  '(e.g. "Money amounts must not be computed with floating point"). level is what a violation means: warn (mention it),',
+  "review (the user must decide) or block (must not be committed). Rules require TYPESAFE_API_KEY; without rules no key is needed.",
+  'Rules must be concrete enough to judge from the diff ("Functions must not exceed 50 lines", not "Write clean code").',
   "BLOCK: fix the cause and verify. REVIEW: report to the user. WARN: mention it.",
-  "Never delete or weaken questions, lower a level, or edit .gitguard.yml to make a check pass, and never commit past a BLOCK."
+  "In repositories with a .gitguard.yml, an agent git commit is blocked unless the last check covered exactly the content being committed and was not BLOCK.",
+  'Before opening a pull request, also run check with target "<base>...HEAD" to review the whole branch.',
+  "Never delete or weaken rules, lower a level, or edit .gitguard.yml to make a check pass, and never commit past a BLOCK."
 ].join(" ");
 var changeScope = external_exports.enum(["staged", "working", "all", "commit", "range"]);
 var text = external_exports.string().trim().min(1);
@@ -42073,11 +42172,11 @@ var cwdField = text.describe("Absolute path of the Git repository to check. Requ
 var taskField = text.describe("Natural language description of the task the changes implement; sent to System One as context.");
 var targetField = text.describe("Commit or complete base..head / base...head range. Required for commit/range; infers scope when omitted.").optional();
 var scopeField = changeScope.describe("Default: all (staged + unstaged); a target infers commit/range.").optional();
-var questionSchema = external_exports.strictObject({
-  id: external_exports.string().regex(QUESTION_ID_PATTERN).describe("Stable id, [a-z0-9_], unique within the check and not used by .gitguard.yml."),
-  question: external_exports.string().trim().min(1).max(1e3).describe('Yes/no question in which "yes" means the problem exists.'),
-  level: external_exports.enum(QUESTION_LEVELS).describe("Finding level when the answer is yes: warn, review or block."),
-  files: external_exports.array(text).optional().describe("Optional globs; the question is skipped when no changed file matches."),
+var ruleSchema = external_exports.strictObject({
+  id: external_exports.string().regex(RULE_ID_PATTERN).describe("Stable id, [a-z0-9_], unique within the check and not used by .gitguard.yml."),
+  rule: external_exports.string().trim().min(1).max(1e3).describe("The rule as a plain statement of what the code must or must not do."),
+  level: external_exports.enum(RULE_LEVELS).describe("Finding level when the change violates the rule: warn, review or block."),
+  files: external_exports.array(text).optional().describe("Optional globs; the rule is skipped when no changed file matches."),
   exclude: external_exports.array(text).optional().describe("Optional globs excluded from files.")
 });
 var INPUT_SCHEMAS = {
@@ -42086,7 +42185,7 @@ var INPUT_SCHEMAS = {
     scope: scopeField,
     target: targetField,
     task: taskField.optional(),
-    questions: external_exports.array(questionSchema).max(MAX_AGENT_QUESTIONS).describe(`Up to ${MAX_AGENT_QUESTIONS} task-specific yes/no questions. Omit to run only deterministic checks and .gitguard.yml questions.`).optional()
+    rules: external_exports.array(ruleSchema).max(MAX_AGENT_RULES).describe(`Up to ${MAX_AGENT_RULES} task-specific rules. Omit to run only deterministic checks and .gitguard.yml rules.`).optional()
   }),
   verify: external_exports.strictObject({
     cwd: cwdField,
@@ -42098,11 +42197,11 @@ var INPUT_SCHEMAS = {
 };
 var TOOL_METADATA = {
   check: {
-    description: "Run the GitGuard gate on changes in cwd: secret scan, the repository-configured test/lint/typecheck commands, and yes/no questions (yours plus .gitguard.yml) answered by TypeSafe System One. Returns PASS/WARN/REVIEW/BLOCK, canCommit and findings with IDs for verify. Executes trusted repository commands which may write files.",
+    description: "Run the GitGuard gate on changes in cwd: secret scan, the repository-configured test/lint/typecheck commands, and rules (yours plus .gitguard.yml) judged by TypeSafe System One. Returns PASS/WARN/REVIEW/BLOCK, canCommit and findings with IDs for verify. Executes trusted repository commands which may write files.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   },
   verify: {
-    description: "Recheck finding IDs from an earlier check after fixing them. Re-runs the gate and re-asks the questions that produced those findings; unknown IDs return BLOCK before any command or API call.",
+    description: "Recheck finding IDs from an earlier check after fixing them. Re-runs the gate and re-checks the rules that produced those findings; unknown IDs return BLOCK before any command or API call.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   }
 };
@@ -42126,7 +42225,7 @@ function parseArguments(name, args) {
     ).join("; "));
   }
   const params = parsed.data;
-  if (!path8.isAbsolute(params.cwd)) {
+  if (!path9.isAbsolute(params.cwd)) {
     throw new Error("cwd must be an absolute path to the repository.");
   }
   const inferredScope = params.target?.includes("..") ? "range" : "commit";
@@ -42164,7 +42263,7 @@ function toolError(code, message) {
   };
 }
 function summarizeFinding(finding) {
-  const question = finding.metadata?.question;
+  const rule = finding.metadata?.rule;
   return {
     id: finding.id,
     ruleId: finding.ruleId,
@@ -42173,12 +42272,13 @@ function summarizeFinding(finding) {
     message: finding.message,
     affectedFiles: finding.affectedFiles,
     expectedEvidence: finding.expectedEvidence,
-    ...question ? { question: question.question, questionSource: question.source } : {}
+    ...rule ? { rule: rule.rule, ruleSource: rule.source } : {}
   };
 }
-function summarizeAnswers(decisions) {
+function summarizeRuleResults(decisions) {
   return Object.values(decisions).map((decision) => ({
     id: decision.id,
+    violated: decision.probability >= VIOLATION_THRESHOLD,
     probability: decision.probability,
     rationale: decision.rationale
   }));
@@ -42198,14 +42298,14 @@ async function executeMcpTool(name, args, engine = new DefaultGitGuardEngine()) 
         scope: params.scope,
         target: params.target,
         task: params.task,
-        questions: params.questions
+        rules: params.rules
       });
       return toolResult({
         status: result.status,
         canCommit: result.canCommit,
         summary: result.verdictSummary,
         deterministic: Object.fromEntries((result.deterministicResults || []).map((check2) => [check2.id, check2.status])),
-        answers: summarizeAnswers(result.semanticDecisions),
+        ruleResults: summarizeRuleResults(result.semanticDecisions),
         findings: result.findings.map(summarizeFinding),
         diffSummary: result.diffSummary,
         metadata: result.metadata
@@ -42228,7 +42328,7 @@ async function executeMcpTool(name, args, engine = new DefaultGitGuardEngine()) 
       remaining: report.remaining || [],
       unknownFindings: report.unknownFindings || [],
       newFindings: newFindings.map(summarizeFinding),
-      answers: summarizeAnswers(report.semanticDecisions),
+      ruleResults: summarizeRuleResults(report.semanticDecisions),
       diffSummary: report.diffSummary,
       metadata: report.metadata
     });

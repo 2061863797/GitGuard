@@ -1,23 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { DefaultGitGuardEngine, mergeQuestions, MAX_AGENT_QUESTIONS } from '../../../src/core/engine.js';
+import { DefaultGitGuardEngine, mergeRules, MAX_AGENT_RULES } from '../../../src/core/engine.js';
 import { parseConfig } from '../../../src/policy/config.js';
 import { ConfigurationError, ProviderError } from '../../../src/types/errors.js';
 import type { DecisionProvider, SemanticQuestion } from '../../../src/types/provider.js';
 import { createTempGitRepo, type GitFixture } from '../../helpers/git-fixture.js';
 import { createOnlineSemanticStub } from '../../helpers/online-semantic-stub.js';
 
-const configWithQuestion = parseConfig(`
+const configWithRule = parseConfig(`
 version: 1
-questions:
-  - id: config_question
-    question: "Does this change leave debug logging behind?"
+rules:
+  - id: config_rule
+    rule: "不得遗留调试日志"
     level: warn
 `);
 
 describe('DefaultGitGuardEngine check and verify', () => {
   let repository: GitFixture;
   let provider: DecisionProvider;
-  let yes: Set<string>;
+  let violated: Set<string>;
   let asked: SemanticQuestion[][];
   let engine: DefaultGitGuardEngine;
 
@@ -26,7 +26,7 @@ describe('DefaultGitGuardEngine check and verify', () => {
     await repository.writeFile('README.md', '# fixture\n');
     await repository.stage();
     await repository.commit('initial');
-    yes = new Set();
+    violated = new Set();
     asked = [];
     const stub = createOnlineSemanticStub();
     provider = {
@@ -35,7 +35,7 @@ describe('DefaultGitGuardEngine check and verify', () => {
       async evaluate(context, questions) {
         asked.push(questions);
         const decisions = await stub.evaluate(context, questions);
-        return decisions.map((d) => ({ ...d, probability: yes.has(d.id) ? 0.9 : d.probability }));
+        return decisions.map((d) => ({ ...d, probability: violated.has(d.id) ? 0.9 : d.probability }));
       },
     };
     engine = new DefaultGitGuardEngine({ typesafeProvider: provider });
@@ -45,7 +45,7 @@ describe('DefaultGitGuardEngine check and verify', () => {
     await repository.cleanup();
   });
 
-  it('runs only the secret scan without .gitguard.yml and never calls the provider without questions', async () => {
+  it('runs only the secret scan without .gitguard.yml and never calls the provider without rules', async () => {
     await repository.writeFile('src/app.ts', 'export const value = 1;\n');
     const result = await engine.check({ cwd: repository.path });
     expect(result.status).toBe('PASS');
@@ -53,11 +53,11 @@ describe('DefaultGitGuardEngine check and verify', () => {
     expect(Object.fromEntries(result.deterministicResults.map((r) => [r.id, r.status]))).toEqual({
       secret_scan: 'passed', test: 'skipped', lint: 'skipped', typecheck: 'skipped',
     });
-    expect(result.metadata.questionsAsked).toBe(0);
+    expect(result.metadata.rulesChecked).toBe(0);
     expect(asked).toEqual([]);
   });
 
-  it('does not need TYPESAFE_API_KEY when no questions are asked', async () => {
+  it('does not need TYPESAFE_API_KEY when no rules are checked', async () => {
     vi.stubEnv('TYPESAFE_API_KEY', '');
     vi.stubEnv('JEV_API_KEY', '');
     try {
@@ -70,7 +70,7 @@ describe('DefaultGitGuardEngine check and verify', () => {
     }
   });
 
-  it('fails closed with a clear error when questions are asked without TYPESAFE_API_KEY', async () => {
+  it('fails closed with a clear error when rules are checked without TYPESAFE_API_KEY', async () => {
     vi.stubEnv('TYPESAFE_API_KEY', '');
     vi.stubEnv('JEV_API_KEY', '');
     try {
@@ -78,84 +78,88 @@ describe('DefaultGitGuardEngine check and verify', () => {
       await repository.writeFile('src/app.ts', 'export const value = 1;\n');
       await expect(live.check({
         cwd: repository.path,
-        questions: [{ id: 'missing_tests', question: 'Does this change lack tests?', level: 'review' }],
+        rules: [{ id: 'needs_tests', rule: 'Behaviour changes must come with tests', level: 'review' }],
       })).rejects.toThrow(/TYPESAFE_API_KEY/);
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
-  it('asks agent and config questions together and turns a yes answer into a finding with its level', async () => {
+  it('checks agent and config rules together and turns a violation into a finding with its level', async () => {
     await repository.writeFile('src/app.ts', 'export const value = 1;\n');
-    yes.add('missing_validation');
+    violated.add('validate_input');
     const result = await engine.check({
       cwd: repository.path,
-      config: configWithQuestion,
+      config: configWithRule,
       task: 'Add value export',
-      questions: [{ id: 'missing_validation', question: 'Does this change skip input validation?', level: 'block' }],
+      rules: [{ id: 'validate_input', rule: 'All external input must be validated', level: 'block' }],
     });
 
     expect(asked).toHaveLength(1);
-    expect(asked[0].map((q) => q.id).sort()).toEqual(['config_question', 'missing_validation']);
-    expect(asked[0].find((q) => q.id === 'missing_validation')?.prompt).toBe('Does this change skip input validation?');
+    expect(asked[0].map((q) => q.id).sort()).toEqual(['config_rule', 'validate_input']);
+    const prompt = asked[0].find((q) => q.id === 'validate_input')!.prompt;
+    expect(prompt).toContain('violate');
+    expect(prompt).toContain('Rule: All external input must be validated');
+    expect(asked[0].find((q) => q.id === 'config_rule')!.prompt).toContain('Rule: 不得遗留调试日志');
     expect(result.status).toBe('BLOCK');
     expect(result.canCommit).toBe(false);
-    const finding = result.findings.find((f) => f.ruleId === 'missing_validation')!;
+    const finding = result.findings.find((f) => f.ruleId === 'validate_input')!;
     expect(finding.status).toBe('block');
     expect(finding.source).toBe('semantic');
-    expect(finding.metadata?.question).toMatchObject({ id: 'missing_validation', source: 'agent', level: 'block' });
-    expect(result.findings.some((f) => f.ruleId === 'config_question')).toBe(false);
+    expect(finding.message).toContain('All external input must be validated');
+    expect(finding.metadata?.rule).toMatchObject({ id: 'validate_input', source: 'agent', level: 'block' });
+    expect(result.findings.some((f) => f.ruleId === 'config_rule')).toBe(false);
   });
 
-  it('skips questions whose file filters do not match the changeset', async () => {
+  it('skips rules whose file filters do not match the changeset', async () => {
     await repository.writeFile('src/app.ts', 'export const value = 1;\n');
     const result = await engine.check({
       cwd: repository.path,
-      questions: [
-        { id: 'migration_rollback', question: 'Does this migration lack a rollback?', level: 'review', files: ['migrations/**'] },
-        { id: 'app_logic', question: 'Does this change break the app?', level: 'review', files: ['src/**'], exclude: ['**/*.test.ts'] },
+      rules: [
+        { id: 'migration_rollback', rule: 'Migrations must have a rollback', level: 'review', files: ['migrations/**'] },
+        { id: 'app_logic', rule: 'App code must not break existing behaviour', level: 'review', files: ['src/**'], exclude: ['**/*.test.ts'] },
       ],
     });
     expect(asked[0].map((q) => q.id)).toEqual(['app_logic']);
-    expect(result.metadata.questionsAsked).toBe(1);
+    expect(result.metadata.rulesChecked).toBe(1);
   });
 
-  it('asks nothing for a clean changeset', async () => {
+  it('checks nothing for a clean changeset', async () => {
     const result = await engine.check({
       cwd: repository.path,
-      questions: [{ id: 'anything', question: 'Is anything wrong?', level: 'warn' }],
+      rules: [{ id: 'anything', rule: 'Nothing may be wrong', level: 'warn' }],
     });
     expect(result.status).toBe('PASS');
     expect(result.diffSummary.filesChanged).toBe(0);
     expect(asked).toEqual([]);
   });
 
-  it('re-asks the stored agent question during verify and resolves it when the answer becomes no', async () => {
+  it('re-checks the stored agent rule during verify and resolves it once it is no longer violated', async () => {
     await repository.writeFile('src/app.ts', 'console.log("debug");\n');
-    yes.add('debug_output');
+    violated.add('no_debug_output');
     const checked = await engine.check({
       cwd: repository.path,
-      questions: [{ id: 'debug_output', question: 'Does this change print debug output?', level: 'review' }],
+      rules: [{ id: 'no_debug_output', rule: 'Code must not print debug output', level: 'review' }],
     });
-    const finding = checked.findings.find((f) => f.ruleId === 'debug_output')!;
+    const finding = checked.findings.find((f) => f.ruleId === 'no_debug_output')!;
     expect(checked.status).toBe('REVIEW');
 
-    yes.clear();
+    violated.clear();
     asked = [];
     await repository.writeFile('src/app.ts', 'export const value = 1;\n');
     const verified = await engine.verify({ cwd: repository.path, findingIds: [finding.id] });
 
-    expect(asked[0].map((q) => q.id)).toEqual(['debug_output']);
+    expect(asked[0].map((q) => q.id)).toEqual(['no_debug_output']);
     expect(verified.status).toBe('PASS');
     expect(verified.resolved).toEqual([finding.id]);
   });
 
-  it('keeps a verified finding open while the answer is still yes', async () => {
+  it('keeps a verified finding open while the rule is still violated', async () => {
     await repository.writeFile('src/app.ts', 'console.log("debug");\n');
-    yes.add('debug_output');
+    violated.add('no_debug_output');
     const checked = await engine.check({
       cwd: repository.path,
-      questions: [{ id: 'debug_output', question: 'Does this change print debug output?', level: 'block' }],
+      rules: [{ id: 'no_debug_output', rule: 'Code must not print debug output', level: 'block' }],
     });
     const finding = checked.findings[0];
     const verified = await engine.verify({ cwd: repository.path, findingIds: [finding.id] });
@@ -163,7 +167,7 @@ describe('DefaultGitGuardEngine check and verify', () => {
     expect(verified.remaining).toEqual([finding.id]);
   });
 
-  it('raises ProviderError when the provider omits an answer', async () => {
+  it('raises ProviderError when the provider omits a judgment', async () => {
     const partial: DecisionProvider = {
       name: 'typesafe',
       async isAvailable() { return true; },
@@ -172,42 +176,43 @@ describe('DefaultGitGuardEngine check and verify', () => {
     await repository.writeFile('src/app.ts', 'export const value = 1;\n');
     await expect(new DefaultGitGuardEngine({ typesafeProvider: partial }).check({
       cwd: repository.path,
-      questions: [{ id: 'q1', question: 'Is something wrong?', level: 'warn' }],
+      rules: [{ id: 'r1', rule: 'Nothing may be wrong', level: 'warn' }],
     })).rejects.toBeInstanceOf(ProviderError);
   });
 });
 
-describe('mergeQuestions', () => {
-  const configQuestions = configWithQuestion.questions!;
+describe('mergeRules', () => {
+  const configRules = configWithRule.rules!;
 
-  it('tags sources and keeps config questions first', () => {
-    const merged = mergeQuestions(configQuestions, [{ id: 'agent_q', question: 'Is it broken?', level: 'warn' }]);
-    expect(merged.map((q) => [q.id, q.source])).toEqual([['config_question', 'config'], ['agent_q', 'agent']]);
+  it('tags sources and keeps config rules first', () => {
+    const merged = mergeRules(configRules, [{ id: 'agent_r', rule: 'Must not break', level: 'warn' }]);
+    expect(merged.map((r) => [r.id, r.source])).toEqual([['config_rule', 'config'], ['agent_r', 'agent']]);
   });
 
-  it('rejects agent questions that reuse a config id or each other', () => {
-    expect(() => mergeQuestions(configQuestions, [{ id: 'config_question', question: 'x?', level: 'warn' }]))
+  it('rejects agent rules that reuse a config id or each other', () => {
+    expect(() => mergeRules(configRules, [{ id: 'config_rule', rule: 'x', level: 'warn' }]))
       .toThrow(ConfigurationError);
-    expect(() => mergeQuestions([], [
-      { id: 'dup', question: 'a?', level: 'warn' },
-      { id: 'dup', question: 'b?', level: 'warn' },
+    expect(() => mergeRules([], [
+      { id: 'dup', rule: 'a', level: 'warn' },
+      { id: 'dup', rule: 'b', level: 'warn' },
     ])).toThrow(/already used/);
   });
 
-  it('rejects malformed agent questions and too many questions', () => {
-    expect(() => mergeQuestions([], [{ id: 'Bad-Id', question: 'x?', level: 'warn' }])).toThrow(/id must match/);
-    expect(() => mergeQuestions([], [{ id: 'ok', question: 'x?', level: 'fatal' as 'warn' }])).toThrow(/level/);
-    const many = Array.from({ length: MAX_AGENT_QUESTIONS + 1 }, (_, i) => ({ id: `q${i}`, question: 'x?', level: 'warn' as const }));
-    expect(() => mergeQuestions([], many)).toThrow(/At most/);
+  it('rejects malformed agent rules and too many rules', () => {
+    expect(() => mergeRules([], [{ id: 'Bad-Id', rule: 'x', level: 'warn' }])).toThrow(/id must match/);
+    expect(() => mergeRules([], [{ id: 'ok', rule: 'x', level: 'fatal' as 'warn' }])).toThrow(/level/);
+    expect(() => mergeRules([], [{ id: 'ok', question: 'x?', level: 'warn' } as never])).toThrow(/rule must be a non-empty string/);
+    const many = Array.from({ length: MAX_AGENT_RULES + 1 }, (_, i) => ({ id: `r${i}`, rule: 'x', level: 'warn' as const }));
+    expect(() => mergeRules([], many)).toThrow(/At most/);
   });
 
-  it('adds stored agent questions only when their id is still free', () => {
-    const merged = mergeQuestions(configQuestions, [], [
-      { id: 'old_agent', question: 'Old?', level: 'review', source: 'agent' },
-      { id: 'config_question', question: 'Stale copy?', level: 'block', source: 'agent' },
-      { id: 'old_config', question: 'Removed from yml?', level: 'block', source: 'config' },
+  it('adds stored agent rules only when their id is still free', () => {
+    const merged = mergeRules(configRules, [], [
+      { id: 'old_agent', rule: 'Old rule', level: 'review', source: 'agent' },
+      { id: 'config_rule', rule: 'Stale copy', level: 'block', source: 'agent' },
+      { id: 'old_config', rule: 'Removed from yml', level: 'block', source: 'config' },
     ]);
-    expect(merged.map((q) => q.id)).toEqual(['config_question', 'old_agent']);
-    expect(merged[0].question).toBe('Does this change leave debug logging behind?');
+    expect(merged.map((r) => r.id)).toEqual(['config_rule', 'old_agent']);
+    expect(merged[0].rule).toBe('不得遗留调试日志');
   });
 });

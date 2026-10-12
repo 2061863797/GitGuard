@@ -1,13 +1,13 @@
 /**
  * src/policy/rules.ts
  * Condition evaluators and gate verdict synthesizers.
- * Supports deterministic checks and yes/no semantic questions with a fixed 0.5 threshold.
+ * Supports deterministic checks and plain-language rules judged by System One with a fixed 0.5 threshold.
  */
 
 import type {
   GateVerdict,
-  QuestionLevel,
-  QuestionSpec,
+  RuleLevel,
+  RuleSpec,
   RuleMatch,
   PolicyConfig,
 } from '../types/policy.js';
@@ -146,29 +146,29 @@ export function filterMatchingFiles(
 }
 
 /**
- * Probability at or above which a question counts as answered "yes".
+ * Probability at or above which a change counts as violating a rule.
  */
-export const QUESTION_YES_THRESHOLD = 0.5;
+export const VIOLATION_THRESHOLD = 0.5;
 
-const LEVEL_SEVERITY: Record<QuestionLevel, FindingSeverity> = {
+const LEVEL_SEVERITY: Record<RuleLevel, FindingSeverity> = {
   warn: 'WARN',
   review: 'ERROR',
   block: 'CRITICAL',
 };
 
 /**
- * Returns the changed files a question applies to, or null when its file filter matches nothing.
- * Questions without `files` apply to every changed file.
+ * Returns the changed files a rule applies to, or null when its file filter matches nothing.
+ * Rules without `files` apply to every changed file.
  */
-export function questionAppliesTo(question: QuestionSpec, changedFiles: string[]): string[] | null {
-  if (!question.files || question.files.length === 0) {
+export function ruleAppliesTo(rule: RuleSpec, changedFiles: string[]): string[] | null {
+  if (!rule.files || rule.files.length === 0) {
     const normalized = normalizeAffectedFiles(changedFiles);
-    const remaining = question.exclude?.length
-      ? normalized.filter((file) => !question.exclude!.some((pattern) => matchesGlob(file, pattern)))
+    const remaining = rule.exclude?.length
+      ? normalized.filter((file) => !rule.exclude!.some((pattern) => matchesGlob(file, pattern)))
       : normalized;
     return remaining.length > 0 ? remaining : null;
   }
-  const matched = filterMatchingFiles(changedFiles, question.files, question.exclude);
+  const matched = filterMatchingFiles(changedFiles, rule.files, rule.exclude);
   return matched.length > 0 ? matched : null;
 }
 
@@ -332,25 +332,32 @@ export function evaluateDeterministicCheck(
 }
 
 /**
- * Evaluates System One's answer to a yes/no question. "Yes" (probability >= 0.5) yields the question's level.
+ * Builds the yes/no question sent to System One for a rule; "yes" means the change violates it.
  */
-export function evaluateQuestion(
+export function rulePrompt(rule: RuleSpec): string {
+  return `Does this code change violate the following rule? Answer yes only if the changed code breaks it.\nRule: ${rule.rule}`;
+}
+
+/**
+ * Evaluates System One's judgment of a rule. A violation (probability >= 0.5) yields the rule's level.
+ */
+export function evaluateRule(
   decision: SemanticDecision,
-  question: QuestionSpec,
+  rule: RuleSpec,
   affectedFiles: string[]
 ): RuleMatch | null {
-  if (decision.probability < QUESTION_YES_THRESHOLD) {
+  if (decision.probability < VIOLATION_THRESHOLD) {
     return null;
   }
 
   const evidence: Evidence[] = [
     {
-      type: 'semantic_answer',
-      ruleName: question.id,
-      message: decision.rationale || `System One answered yes to: ${question.question}`,
+      type: 'rule_violation',
+      ruleName: rule.id,
+      message: decision.rationale || `System One judged that the change violates: ${rule.rule}`,
       details: {
-        question: question.question,
-        source: question.source,
+        rule: rule.rule,
+        source: rule.source,
         probability: decision.probability,
         confidence: decision.confidence,
         provider: decision.provider,
@@ -359,19 +366,19 @@ export function evaluateQuestion(
   ];
 
   return {
-    ruleId: question.id,
+    ruleId: rule.id,
     source: 'semantic',
-    status: question.level,
-    severity: LEVEL_SEVERITY[question.level],
+    status: rule.level,
+    severity: LEVEL_SEVERITY[rule.level],
     message: decision.rationale
-      ? `${question.question} — ${decision.rationale}`
-      : `${question.question} (yes, p=${decision.probability.toFixed(2)})`,
+      ? `Violates rule "${rule.rule}": ${decision.rationale}`
+      : `Violates rule "${rule.rule}" (p=${decision.probability.toFixed(2)})`,
     probability: decision.probability,
     affectedFiles,
     evidence,
     expectedEvidence: [
-      `Change the code so the answer to "${question.question}" becomes no, then run verify with this finding ID.`,
+      `Change the code so it follows the rule "${rule.rule}", then run verify with this finding ID.`,
     ],
-    question,
+    rule,
   };
 }

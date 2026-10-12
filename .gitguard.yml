@@ -1,6 +1,6 @@
 # GitGuard repository configuration
 # Deterministic checks run these commands; secret scanning is always on.
-# Questions below are asked on every check in addition to the agent's own questions.
+# Rules below are checked on every run in addition to the agent's own rules.
 version: 1
 
 deterministic:
@@ -14,12 +14,12 @@ deterministic:
     run: "pnpm typecheck"
     timeout_ms: 60000
 
-questions:
-  - id: bundle_out_of_date
-    question: "Does this change modify files under src/ without also updating the generated bundle plugins/gitguard/server/gitguard-mcp.mjs?"
+rules:
+  - id: bundle_up_to_date
+    rule: "修改 src/ 下的代码时，必须同时更新打包产物 plugins/gitguard/server/gitguard-mcp.mjs"
     level: review
     files: ["src/**", "plugins/gitguard/server/**"]
-  - id: plugin_versions_diverge
-    question: "Does this change bump the version in package.json, src/version.ts or a plugin.json without updating all of them to the same version?"
+  - id: versions_in_sync
+    rule: "package.json、src/version.ts 和两个 plugin.json 中的版本号必须保持一致"
     level: review
     files: ["package.json", "src/version.ts", "plugins/gitguard/**/plugin.json"]

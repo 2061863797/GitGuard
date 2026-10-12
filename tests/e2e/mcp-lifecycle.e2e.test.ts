@@ -28,7 +28,8 @@ describe('GitGuard MCP lifecycle (stdio)', () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual(['check', 'verify']);
     const check = tools.find((tool) => tool.name === 'check')!;
     expect(check.inputSchema.required).toContain('cwd');
-    expect(session.client.getInstructions()).toMatch(/"yes" means a problem exists/);
+    expect(Object.keys(check.inputSchema.properties ?? {})).toContain('rules');
+    expect(session.client.getInstructions()).toMatch(/judge whether the change violates rules/);
   });
 
   it('blocks a leaked secret, then resolves it through verify after the fix', async () => {
@@ -50,14 +51,14 @@ describe('GitGuard MCP lifecycle (stdio)', () => {
     expect(verified.data.resolved).toEqual([finding.id]);
   });
 
-  it('asks agent and config questions, records findings, and re-asks them on verify', async () => {
-    await setupGitGuardRepo(repo, `questions:
-  - id: problem_config_rule
-    question: "Does this change violate the config rule?"
+  it('checks agent and config rules, records findings, and re-checks them on verify', async () => {
+    await setupGitGuardRepo(repo, `rules:
+  - id: violated_config_rule
+    rule: "业务代码必须通过统一的日志模块输出"
     level: review
     files: ["src/**"]
   - id: docs_only_rule
-    question: "Does this change break the docs?"
+    rule: "Docs must keep the table of contents in sync"
     level: block
     files: ["docs/**"]
 `);
@@ -67,26 +68,27 @@ describe('GitGuard MCP lifecycle (stdio)', () => {
     const checked = await session.call('check', {
       cwd: repo.path,
       task: 'Add value export',
-      questions: [
-        { id: 'problem_agent_rule', question: 'Does this change skip validation?', level: 'block' },
-        { id: 'clean_agent_rule', question: 'Does this change leave debug output?', level: 'warn' },
+      rules: [
+        { id: 'violated_agent_rule', rule: 'All external input must be validated', level: 'block' },
+        { id: 'clean_agent_rule', rule: 'Code must not print debug output', level: 'warn' },
       ],
     });
     expect(checked.isError).toBe(false);
     expect(checked.data.status).toBe('BLOCK');
-    expect(checked.data.metadata.questionsAsked).toBe(3);
-    expect(checked.data.answers.map((a: any) => a.id).sort()).toEqual(['clean_agent_rule', 'problem_agent_rule', 'problem_config_rule']);
+    expect(checked.data.metadata.rulesChecked).toBe(3);
+    expect(checked.data.ruleResults.map((r: any) => r.id).sort())
+      .toEqual(['clean_agent_rule', 'violated_agent_rule', 'violated_config_rule']);
     const byRule = Object.fromEntries(checked.data.findings.map((f: any) => [f.ruleId, f]));
-    expect(byRule.problem_agent_rule).toMatchObject({ status: 'block', questionSource: 'agent', question: 'Does this change skip validation?' });
-    expect(byRule.problem_config_rule).toMatchObject({ status: 'review', questionSource: 'config' });
+    expect(byRule.violated_agent_rule).toMatchObject({ status: 'block', ruleSource: 'agent', rule: 'All external input must be validated' });
+    expect(byRule.violated_config_rule).toMatchObject({ status: 'review', ruleSource: 'config', rule: '业务代码必须通过统一的日志模块输出' });
 
-    const verified = await session.call('verify', { cwd: repo.path, findingIds: [byRule.problem_agent_rule.id] });
-    expect(verified.data.answers.map((a: any) => a.id)).toContain('problem_agent_rule');
+    const verified = await session.call('verify', { cwd: repo.path, findingIds: [byRule.violated_agent_rule.id] });
+    expect(verified.data.ruleResults.map((r: any) => r.id)).toContain('violated_agent_rule');
     expect(verified.data.status).toBe('BLOCK');
-    expect(verified.data.remaining).toEqual([byRule.problem_agent_rule.id]);
+    expect(verified.data.remaining).toEqual([byRule.violated_agent_rule.id]);
   });
 
-  it('runs without TYPESAFE_API_KEY when no questions are asked, and fails clearly when they are', async () => {
+  it('runs without TYPESAFE_API_KEY when no rules are checked, and fails clearly when they are', async () => {
     await setupGitGuardRepo(repo);
     session = await spawnMcpClient({ withKey: false });
     await repo.writeFile('src/app.ts', 'export const value = 1;\n');
@@ -95,20 +97,11 @@ describe('GitGuard MCP lifecycle (stdio)', () => {
     expect(plain.isError).toBe(false);
     expect(plain.data.status).toBe('PASS');
 
-    const withQuestions = await session.call('check', {
+    const withRules = await session.call('check', {
       cwd: repo.path,
-      questions: [{ id: 'q1', question: 'Is anything wrong?', level: 'warn' }],
+      rules: [{ id: 'r1', rule: 'Nothing may be wrong', level: 'warn' }],
     });
-    expect(withQuestions.isError).toBe(true);
-    expect(withQuestions.text).toContain('TYPESAFE_API_KEY');
-  });
-
-  it('rejects an old-format .gitguard.yml with a migration hint', async () => {
-    await repo.writeFile('.gitguard.yml', 'version: 1\ncustom_rules:\n  - id: x\n    question: "q"\n    files: ["src/**"]\n');
-    await repo.writeFile('src/app.ts', 'export const value = 1;\n');
-    session = await spawnMcpClient();
-    const result = await session.call('check', { cwd: repo.path });
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain("'custom_rules' was removed");
+    expect(withRules.isError).toBe(true);
+    expect(withRules.text).toContain('TYPESAFE_API_KEY');
   });
 });

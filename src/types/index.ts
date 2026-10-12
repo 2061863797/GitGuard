@@ -86,9 +86,9 @@ export type {
 export type {
   GateVerdict,
   GateStatus,
-  QuestionLevel,
-  QuestionSource,
-  QuestionSpec,
+  RuleLevel,
+  RuleSource,
+  RuleSpec,
   ContextBudgetConfig,
   SystemOneConfig,
   DeterministicCheckConfig,
@@ -103,7 +103,7 @@ export type {
 
 // Core Engine Domain Types
 export type {
-  AgentQuestion,
+  AgentRule,
   CheckOptions,
   CheckResult,
   VerifyOptions,

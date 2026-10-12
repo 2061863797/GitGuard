@@ -6,12 +6,12 @@
 import type { ChangeScope } from './git.js';
 import type { TaskContext } from './context.js';
 import type { Finding, FindingFilter, VerificationReport } from './finding.js';
-import type { PolicyConfig, QuestionSpec } from './policy.js';
+import type { PolicyConfig, RuleSpec } from './policy.js';
 
 /**
- * Agent-supplied question; `source` is assigned by the engine.
+ * Agent-supplied rule; `source` is assigned by the engine.
  */
-export type AgentQuestion = Omit<QuestionSpec, 'source'>;
+export type AgentRule = Omit<RuleSpec, 'source'>;
 
 /**
  * Options for GitGuardEngine.check().
@@ -25,8 +25,8 @@ export interface CheckOptions {
   target?: string;
   /** Declared task description or structured task context */
   task?: string | TaskContext;
-  /** Questions supplied by the calling agent for this check */
-  questions?: AgentQuestion[];
+  /** Rules supplied by the calling agent for this check */
+  rules?: AgentRule[];
   /** Explicit path to .gitguard.yml configuration file */
   configPath?: string;
   /** Programmatic policy configuration override */
@@ -67,7 +67,7 @@ export interface VerifyOptions {
  */
 export interface GitGuardEngine {
   /**
-   * Executes the gate: deterministic checks plus agent and config questions.
+   * Executes the gate: deterministic checks plus agent and config rules.
    */
   check(options: CheckOptions): Promise<CheckResult>;
 

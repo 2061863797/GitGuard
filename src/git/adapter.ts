@@ -44,6 +44,7 @@ const ALLOWED_GIT_SUBCOMMANDS = new Set([
   'symbolic-ref',
   'merge-base',
   'version',
+  'hash-object',
 ]);
 
 /** Strictly forbidden mutating commands */
@@ -151,6 +152,9 @@ export class GitCLIAdapter implements GitAdapter, IGitAdapter {
       )
     ) {
       throw new ForbiddenGitOperationError(`${subcommand} write or external-diff option`);
+    }
+    if (subcommand === 'hash-object' && optionArgs.some((arg) => arg === '-w' || arg === '--stdin-paths' || arg.startsWith('--literally'))) {
+      throw new ForbiddenGitOperationError('hash-object write option');
     }
     if (subcommand === 'cat-file' && optionArgs.some((arg) => arg === '--filters' || arg === '--textconv')) {
       throw new ForbiddenGitOperationError('cat-file external filter option');

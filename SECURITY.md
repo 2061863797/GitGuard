@@ -4,12 +4,12 @@ This document describes the current source behavior. Installed plugins run the c
 
 ## Trust boundaries
 
-GitGuard is an MCP server. It reads Git repositories, runs configured local tools, and sends repository context to TypeSafe / Jev when semantic questions are asked. Repository contents, agent-supplied questions and model responses are untrusted input. Project check commands are executable code and require trust in the repository; they come only from the repository `.gitguard.yml`, never from the calling agent.
+GitGuard is an MCP server. It reads Git repositories, runs configured local tools, and sends repository context to TypeSafe / Jev when rules are checked. Repository contents, agent-supplied rules and model responses are untrusted input. Project check commands are executable code and require trust in the repository; they come only from the repository `.gitguard.yml`, never from the calling agent.
 
 ```text
 Repository content
   ├─ Raw context → local deterministic checks and secret scan
-  └─ Semantic context → privacy filtering → TypeSafe (only when questions are asked)
+  └─ Semantic context → privacy filtering → TypeSafe (only when rules are checked)
 Finding records → current repository store → verification and state updates
 ```
 
@@ -31,7 +31,11 @@ Surrounding code and optional full-file context use the diff's new-side snapshot
 
 Configured test, lint and typecheck commands run in the repository with timeouts and without shell interpolation. Those commands can run repository scripts and write files. They are not an operating-system sandbox. Read their configuration and scripts before checking an unfamiliar repository.
 
-GitGuard writes finding records under `.git/gitguard/`. Without a `.gitguard.yml`, only the secret scan runs; test, lint and typecheck commands run only when the repository configures them.
+GitGuard writes finding records and the last-check record used by the commit gate under `.git/gitguard/`. Without a `.gitguard.yml`, only the secret scan runs; test, lint and typecheck commands run only when the repository configures them.
+
+### Commit gate
+
+In repositories with a GitGuard config file, the plugin's PreToolUse hook blocks an agent's shell `git commit` unless the last check covered the exact blob ids being committed, HEAD is unchanged and the last verdict was not `BLOCK`. It is a guard against forgetting the check, not a security boundary: it does not apply to commits made outside the agent's shell tool, it lets commands through when Git is unavailable, and an agent with write access could edit hook configuration or the record. The hook only reads repository state; it runs `git rev-parse`, `git diff`, `git ls-files` and `git hash-object` without `-w`.
 
 ### Provider and configuration authority
 
@@ -39,7 +43,7 @@ Repository `.gitguard.yml` cannot disable secret redaction, include full files i
 
 The provider uses HTTPS for remote endpoints and permits explicitly configured HTTP loopback endpoints for local use. The default endpoint is TypeSafe. Keep API keys in the caller's environment or secret manager, not in repository configuration. A trusted endpoint override determines where the API key and context are sent.
 
-There is no offline, mock or cached semantic mode. Every asked question needs a fresh TypeSafe answer; missing keys, failed requests and missing or invalid answers produce errors instead of invented success scores. Checks without questions make no online request. Verification of unknown finding IDs stops before commands and online evaluation.
+There is no offline, mock or cached semantic mode. Every checked rule needs a fresh TypeSafe judgment; missing keys, failed requests and missing or invalid answers produce errors instead of invented success scores. Checks without rules make no online request. Verification of unknown finding IDs stops before commands and online evaluation.
 
 ### Finding state and verification integrity
 
@@ -49,11 +53,11 @@ Corrupt or unreadable stores stop verification. Writes use a temporary file in t
 
 The verifier also checks tracked finding content at `HEAD` to avoid resolving supported violations merely because the offending changes were committed. Finding IDs and fingerprints are not globally scoped identifiers for unrelated repositories. Reports apply to the selected targets and Git scope.
 
-An empty diff asks no questions. Questions whose `files` filter matches no changed file are not sent. Verification re-asks the stored question of each targeted finding; a finding resolves only when the fresh answer is no (probability below 0.5) and deterministic checks no longer report it.
+An empty diff checks no rules. Rules whose `files` filter matches no changed file are not sent. Verification re-checks the stored rule of each targeted finding; a finding resolves only when the fresh judgment is no violation (probability below 0.5) and deterministic checks no longer report it.
 
 ### Model limitations
 
-Yes/no questions and response validation constrain answer shape and make provider failures visible. They do not prove model judgments correct or eliminate prompt injection in repository content or agent-written questions. Online probabilities complement deterministic checks and human review.
+Rule judgments and response validation constrain answer shape and make provider failures visible. They do not prove model judgments correct or eliminate prompt injection in repository content or agent-written rules. Online probabilities complement deterministic checks and human review.
 
 ## Supported versions
 

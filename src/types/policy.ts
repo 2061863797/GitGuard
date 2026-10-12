@@ -1,6 +1,6 @@
 /**
  * src/types/policy.ts
- * Policy engine configuration, questions, verdicts, and evaluation result models for GitGuard.
+ * Policy engine configuration, rules, verdicts, and evaluation result models for GitGuard.
  */
 
 import type { Finding, FindingSeverity, FindingStatus, FindingSource, Evidence } from './finding.js';
@@ -19,32 +19,32 @@ export type GateVerdict = 'PASS' | 'WARN' | 'REVIEW' | 'BLOCK';
 export type GateStatus = GateVerdict;
 
 /**
- * Finding level assigned when a question is answered "yes".
+ * Finding level assigned when a change violates a rule.
  */
-export type QuestionLevel = 'warn' | 'review' | 'block';
+export type RuleLevel = 'warn' | 'review' | 'block';
 
 /**
- * Where a semantic question came from.
+ * Where a rule came from.
  */
-export type QuestionSource = 'agent' | 'config';
+export type RuleSource = 'agent' | 'config';
 
 /**
- * Yes/no semantic question asked to System One. Phrased so that "yes" means a problem exists.
- * Agent-supplied questions and `.gitguard.yml` questions share this shape.
+ * A rule the change must follow, written as a plain statement (e.g. "Money must not use floating point").
+ * System One judges whether the change violates it. Agent and `.gitguard.yml` rules share this shape.
  */
-export interface QuestionSpec {
-  /** Stable identifier ([a-z0-9_]); unique across agent and config questions in one check */
+export interface RuleSpec {
+  /** Stable identifier ([a-z0-9_]); unique across agent and config rules in one check */
   id: string;
-  /** Natural language question; "yes" must mean the problem exists */
-  question: string;
-  /** Finding level when System One answers "yes" with probability >= 0.5 */
-  level: QuestionLevel;
-  /** Optional include globs; the question is skipped when no changed file matches */
+  /** The rule itself, stated as what the code must (not) do */
+  rule: string;
+  /** Finding level when System One judges the change violates the rule with probability >= 0.5 */
+  level: RuleLevel;
+  /** Optional include globs; the rule is skipped when no changed file matches */
   files?: string[];
   /** Optional exclude globs */
   exclude?: string[];
-  /** Origin of the question */
-  source: QuestionSource;
+  /** Origin of the rule */
+  source: RuleSource;
 }
 
 /**
@@ -145,8 +145,8 @@ export interface PolicyConfig {
   system_one?: SystemOneConfig;
   /** Deterministic command configurations */
   deterministic?: DeterministicPolicyConfig;
-  /** User-written semantic questions asked on every check */
-  questions?: QuestionSpec[];
+  /** User-written rules checked on every run */
+  rules?: RuleSpec[];
   /** Privacy and data exclusion configuration */
   privacy?: PrivacyConfig;
 }
@@ -173,8 +173,8 @@ export interface RuleMatch {
   evidence: Evidence[];
   /** Actionable resolution instructions */
   expectedEvidence: string[];
-  /** Originating question for semantic matches */
-  question?: QuestionSpec;
+  /** Originating rule for semantic matches */
+  rule?: RuleSpec;
 }
 
 /**
@@ -200,12 +200,12 @@ export interface PolicyEvaluationResult {
  */
 export interface PolicyEngine {
   /**
-   * Evaluates deterministic results and answers to the asked questions to produce the final verdict.
+   * Evaluates deterministic results and System One's judgments of the checked rules to produce the final verdict.
    */
   evaluate(
     deterministicResults: DeterministicResult[],
     semanticDecisions: SemanticDecision[],
-    questions: QuestionSpec[],
+    rules: RuleSpec[],
     policy: PolicyConfig,
     context: EvaluationContext
   ): PolicyEvaluationResult;
