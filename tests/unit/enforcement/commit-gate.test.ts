@@ -114,6 +114,8 @@ describe('commit gate', () => {
       await sub.commit('v1');
       await repo.exec(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub.repoPath.split(path.sep).join('/'), 'mod']);
       await repo.exec(['commit', '-q', '--no-verify', '-m', 'add submodule']);
+      await repo.exec(['-C', 'mod', 'config', 'user.name', 'GitGuard Test']);
+      await repo.exec(['-C', 'mod', 'config', 'user.email', 'test@gitguard.local']);
       await repo.exec(['-C', 'mod', 'commit', '-q', '--allow-empty', '-m', 'bump']);
 
       const result = await engine.check({ cwd: repo.repoPath });
