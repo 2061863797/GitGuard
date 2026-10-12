@@ -21,7 +21,7 @@ export interface McpSession {
 
 /**
  * Spawns a real GitGuard MCP stdio server subprocess. TypeSafe HTTP calls are answered by a
- * preloaded fetch stub: question ids starting with `problem_` get "yes", all others "no".
+ * preloaded fetch stub: rule ids starting with `violated_` are judged as violated, all others pass.
  */
 export async function spawnMcpClient(options: { serverPath?: string; withKey?: boolean } = {}): Promise<McpSession> {
   const env: Record<string, string> = {

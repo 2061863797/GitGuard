@@ -11,7 +11,7 @@ import {
   loadConfig,
   parseConfig,
   validateConfig,
-  validateQuestion,
+  validateRule,
   DEFAULT_POLICY_CONFIG,
   DEFAULT_CONFIG,
   deepMerge,
@@ -33,7 +33,7 @@ describe('Policy Configuration Loader & Validator', () => {
     }
   });
 
-  it('defaults to secret scanning only, with no project commands and no questions', () => {
+  it('defaults to secret scanning only, with no project commands and no rules', () => {
     expect(DEFAULT_CONFIG).toEqual(DEFAULT_POLICY_CONFIG);
     expect(DEFAULT_CONFIG.version).toBe(1);
     expect(DEFAULT_CONFIG.deterministic?.secret_scan?.enabled).toBe(true);
@@ -41,7 +41,7 @@ describe('Policy Configuration Loader & Validator', () => {
       expect(DEFAULT_CONFIG.deterministic?.[id]?.enabled).toBe(false);
       expect(DEFAULT_CONFIG.deterministic?.[id]?.run).toBeUndefined();
     }
-    expect(DEFAULT_CONFIG.questions).toEqual([]);
+    expect(DEFAULT_CONFIG.rules).toEqual([]);
     expect(DEFAULT_CONFIG.context?.max_diff_chars).toBe(50000);
   });
 
@@ -51,23 +51,23 @@ describe('Policy Configuration Loader & Validator', () => {
     expect(config.deterministic?.test?.enabled).toBe(false);
   });
 
-  it('parses questions, tags them as config questions and keeps defaults', () => {
+  it('parses rules, tags them as config rules and keeps defaults', () => {
     const config = parseConfig(`
 version: 1
 context:
   max_diff_chars: 20000
-questions:
+rules:
   - id: auth_without_tests
-    question: "Does this change modify auth without tests?"
+    rule: "修改鉴权代码必须同时补充测试"
     level: review
     files: ["src/auth/**"]
     exclude: ["**/*.test.ts"]
 `);
     expect(config.context?.max_diff_chars).toBe(20000);
     expect(config.context?.max_total_chars).toBe(100000);
-    expect(config.questions).toEqual([{
+    expect(config.rules).toEqual([{
       id: 'auth_without_tests',
-      question: 'Does this change modify auth without tests?',
+      rule: '修改鉴权代码必须同时补充测试',
       level: 'review',
       files: ['src/auth/**'],
       exclude: ['**/*.test.ts'],
@@ -90,36 +90,32 @@ deterministic:
     expect(config.deterministic?.typecheck?.enabled).toBe(false);
   });
 
-  it.each([
-    ['rules', 'rules:\n  task_completed:\n    review_below: 0.6\n'],
-    ['custom_rules', 'custom_rules:\n  - id: x\n    question: "q"\n    files: ["src/**"]\n'],
-    ['gate', 'gate:\n  block_on: [BLOCK]\n'],
-    ['system_one.provider', 'system_one:\n  provider: mock\n'],
-  ])('rejects the removed %s setting with a migration hint', (key, body) => {
-    expect(() => parseConfig('version: 1\n' + body)).toThrow(new RegExp(`'${key.replace('.', '\\.')}' was removed`));
+  it('requires rules to be a list', () => {
+    expect(() => parseConfig('version: 1\nrules:\n  no_float: "x"\n')).toThrow(/rules must be a list/);
   });
 
-  it('rejects invalid or duplicated questions', () => {
+  it('rejects invalid or duplicated rules', () => {
     const result = validateConfig({
       version: 1,
-      questions: [
-        { id: 'Bad Id', question: '', level: 'fatal', files: 'src/**' },
-        { id: 'dup', question: 'a?', level: 'warn' },
-        { id: 'dup', question: 'b?', level: 'warn', extra: true },
+      rules: [
+        { id: 'Bad Id', rule: '', level: 'fatal', files: 'src/**' },
+        { id: 'dup', rule: 'a?', level: 'warn' },
+        { id: 'dup', rule: 'b?', level: 'warn', extra: true },
       ],
     });
     expect(result.valid).toBe(false);
-    expect(result.errors.join('\n')).toMatch(/questions\[0\]\.id must match/);
-    expect(result.errors.join('\n')).toMatch(/questions\[0\]\.question/);
-    expect(result.errors.join('\n')).toMatch(/questions\[0\]\.level/);
-    expect(result.errors.join('\n')).toMatch(/questions\[0\]\.files/);
+    expect(result.errors.join('\n')).toMatch(/rules\[0\]\.id must match/);
+    expect(result.errors.join('\n')).toMatch(/rules\[0\]\.rule must be/);
+    expect(result.errors.join('\n')).toMatch(/rules\[0\]\.level/);
+    expect(result.errors.join('\n')).toMatch(/rules\[0\]\.files/);
     expect(result.errors.join('\n')).toMatch(/'dup' is duplicated/);
-    expect(result.errors.join('\n')).toMatch(/questions\[2\]\.extra is not a supported question field/);
-    expect(validateConfig({ version: 1, questions: 'nope' }).errors).toContain('questions must be an array');
+    expect(result.errors.join('\n')).toMatch(/rules\[2\]\.extra is not a supported rule field/);
+    expect(validateConfig({ version: 1, rules: [{ id: 'q', question: 'Is it bad?', level: 'warn' }] }).errors.join('\n'))
+      .toMatch(/rules\[0\]\.question is not a supported rule field/);
   });
 
-  it('validateQuestion accepts a minimal valid question', () => {
-    expect(validateQuestion({ id: 'ok_1', question: 'Is it broken?', level: 'block' }, 'q')).toEqual([]);
+  it('validateRule accepts a minimal valid rule', () => {
+    expect(validateRule({ id: 'ok_1', rule: 'Public APIs must stay backward compatible', level: 'block' }, 'r')).toEqual([]);
   });
 
   it('throws ConfigurationError on malformed YAML or non-object YAML', () => {

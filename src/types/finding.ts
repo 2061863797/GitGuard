@@ -145,8 +145,8 @@ export interface VerificationReportMetadata {
   gitRoot: string;
   /** HEAD commit SHA at verification time */
   headSha: string;
-  /** Number of semantic questions sent to System One (0 when skipped) */
-  questionsAsked?: number;
+  /** Number of rules sent to System One (0 when skipped) */
+  rulesChecked?: number;
   /**
    * Whether finding persistence to the repository store succeeded.
    * `false` means findings were computed but NOT saved: a later `verify()`
@@ -187,7 +187,7 @@ export interface VerificationReport {
   remainingFindings?: string[];
   /** Raw deterministic check outcomes */
   deterministicResults: DeterministicResult[];
-  /** Semantic decisions indexed by question/rule ID */
+  /** Semantic decisions indexed by rule ID */
   semanticDecisions: Record<string, SemanticDecision>;
   /** Execution metadata */
   metadata: VerificationReportMetadata;

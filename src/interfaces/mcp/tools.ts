@@ -5,12 +5,13 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { CallToolResult, TextContent, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { GitGuardEngine } from '../../types/engine.js';
-import { DefaultGitGuardEngine, MAX_AGENT_QUESTIONS } from '../../core/engine.js';
+import { DefaultGitGuardEngine, MAX_AGENT_RULES } from '../../core/engine.js';
 import type { ChangeScope } from '../../types/git.js';
 import type { SemanticDecision } from '../../types/provider.js';
 import type { Finding } from '../../types/finding.js';
 import { redactSecrets } from '../../context/filter.js';
-import { QUESTION_ID_PATTERN, QUESTION_LEVELS } from '../../policy/config.js';
+import { RULE_ID_PATTERN, RULE_LEVELS } from '../../policy/config.js';
+import { VIOLATION_THRESHOLD } from '../../policy/rules.js';
 
 /**
  * Rules every client sees, whether or not it loads the GitGuard skill.
@@ -19,12 +20,15 @@ export const GITGUARD_SERVER_INSTRUCTIONS = [
   'GitGuard checks code changes in a Git repository before they are committed.',
   'Call check after finishing a task and before committing; call verify with the finding IDs after fixing them.',
   'check runs secret scanning plus the test/lint/typecheck commands configured in the repository .gitguard.yml,',
-  'and asks TypeSafe System One yes/no questions: questions you pass in, plus questions from .gitguard.yml.',
-  'Write 3-6 questions specific to this task and project, one concern each, phrased so that "yes" means a problem exists',
-  '(e.g. "Does this change compute money with floating point?"). level is what a "yes" means: warn (mention it),',
-  'review (the user must decide) or block (must not be committed). Questions require TYPESAFE_API_KEY; without questions no key is needed.',
+  'and has TypeSafe System One judge whether the change violates rules: rules you pass in, plus rules from .gitguard.yml.',
+  'Write 3-6 rules specific to this task and project, one concern each, stated plainly as what the code must or must not do',
+  '(e.g. "Money amounts must not be computed with floating point"). level is what a violation means: warn (mention it),',
+  'review (the user must decide) or block (must not be committed). Rules require TYPESAFE_API_KEY; without rules no key is needed.',
+  'Rules must be concrete enough to judge from the diff ("Functions must not exceed 50 lines", not "Write clean code").',
   'BLOCK: fix the cause and verify. REVIEW: report to the user. WARN: mention it.',
-  'Never delete or weaken questions, lower a level, or edit .gitguard.yml to make a check pass, and never commit past a BLOCK.',
+  'In repositories with a .gitguard.yml, an agent git commit is blocked unless the last check covered exactly the content being committed and was not BLOCK.',
+  'Before opening a pull request, also run check with target "<base>...HEAD" to review the whole branch.',
+  'Never delete or weaken rules, lower a level, or edit .gitguard.yml to make a check pass, and never commit past a BLOCK.',
 ].join(' ');
 
 const changeScope = z.enum(['staged', 'working', 'all', 'commit', 'range']);
@@ -34,11 +38,11 @@ const taskField = text.describe('Natural language description of the task the ch
 const targetField = text.describe('Commit or complete base..head / base...head range. Required for commit/range; infers scope when omitted.').optional();
 const scopeField = changeScope.describe('Default: all (staged + unstaged); a target infers commit/range.').optional();
 
-const questionSchema = z.strictObject({
-  id: z.string().regex(QUESTION_ID_PATTERN).describe('Stable id, [a-z0-9_], unique within the check and not used by .gitguard.yml.'),
-  question: z.string().trim().min(1).max(1000).describe('Yes/no question in which "yes" means the problem exists.'),
-  level: z.enum(QUESTION_LEVELS).describe('Finding level when the answer is yes: warn, review or block.'),
-  files: z.array(text).optional().describe('Optional globs; the question is skipped when no changed file matches.'),
+const ruleSchema = z.strictObject({
+  id: z.string().regex(RULE_ID_PATTERN).describe('Stable id, [a-z0-9_], unique within the check and not used by .gitguard.yml.'),
+  rule: z.string().trim().min(1).max(1000).describe('The rule as a plain statement of what the code must or must not do.'),
+  level: z.enum(RULE_LEVELS).describe('Finding level when the change violates the rule: warn, review or block.'),
+  files: z.array(text).optional().describe('Optional globs; the rule is skipped when no changed file matches.'),
   exclude: z.array(text).optional().describe('Optional globs excluded from files.'),
 });
 
@@ -48,8 +52,8 @@ const INPUT_SCHEMAS = {
     scope: scopeField,
     target: targetField,
     task: taskField.optional(),
-    questions: z.array(questionSchema).max(MAX_AGENT_QUESTIONS)
-      .describe(`Up to ${MAX_AGENT_QUESTIONS} task-specific yes/no questions. Omit to run only deterministic checks and .gitguard.yml questions.`)
+    rules: z.array(ruleSchema).max(MAX_AGENT_RULES)
+      .describe(`Up to ${MAX_AGENT_RULES} task-specific rules. Omit to run only deterministic checks and .gitguard.yml rules.`)
       .optional(),
   }),
   verify: z.strictObject({
@@ -67,12 +71,12 @@ type ToolParameters = z.infer<(typeof INPUT_SCHEMAS)['check']> & Partial<z.infer
 const TOOL_METADATA: Record<ToolName, Pick<Tool, 'description' | 'annotations'>> = {
   check: {
     description: 'Run the GitGuard gate on changes in cwd: secret scan, the repository-configured test/lint/typecheck commands, ' +
-      'and yes/no questions (yours plus .gitguard.yml) answered by TypeSafe System One. Returns PASS/WARN/REVIEW/BLOCK, ' +
+      'and rules (yours plus .gitguard.yml) judged by TypeSafe System One. Returns PASS/WARN/REVIEW/BLOCK, ' +
       'canCommit and findings with IDs for verify. Executes trusted repository commands which may write files.',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
   verify: {
-    description: 'Recheck finding IDs from an earlier check after fixing them. Re-runs the gate and re-asks the questions ' +
+    description: 'Recheck finding IDs from an earlier check after fixing them. Re-runs the gate and re-checks the rules ' +
       'that produced those findings; unknown IDs return BLOCK before any command or API call.',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
@@ -145,7 +149,7 @@ function toolError(code: string, message: string): McpToolResult {
 }
 
 function summarizeFinding(finding: Finding) {
-  const question = finding.metadata?.question as { question?: string; source?: string } | undefined;
+  const rule = finding.metadata?.rule as { rule?: string; source?: string } | undefined;
   return {
     id: finding.id,
     ruleId: finding.ruleId,
@@ -154,13 +158,14 @@ function summarizeFinding(finding: Finding) {
     message: finding.message,
     affectedFiles: finding.affectedFiles,
     expectedEvidence: finding.expectedEvidence,
-    ...(question ? { question: question.question, questionSource: question.source } : {}),
+    ...(rule ? { rule: rule.rule, ruleSource: rule.source } : {}),
   };
 }
 
-function summarizeAnswers(decisions: Record<string, SemanticDecision>) {
+function summarizeRuleResults(decisions: Record<string, SemanticDecision>) {
   return Object.values(decisions).map((decision) => ({
     id: decision.id,
+    violated: decision.probability >= VIOLATION_THRESHOLD,
     probability: decision.probability,
     rationale: decision.rationale,
   }));
@@ -178,12 +183,12 @@ export async function executeMcpTool(name: string, args: unknown, engine: GitGua
   try {
     if (name === 'check') {
       const result = await engine.check({
-        cwd: params.cwd, scope: params.scope as ChangeScope | undefined, target: params.target, task: params.task, questions: params.questions,
+        cwd: params.cwd, scope: params.scope as ChangeScope | undefined, target: params.target, task: params.task, rules: params.rules,
       });
       return toolResult({
         status: result.status, canCommit: result.canCommit, summary: result.verdictSummary,
         deterministic: Object.fromEntries((result.deterministicResults || []).map((check) => [check.id, check.status])),
-        answers: summarizeAnswers(result.semanticDecisions),
+        ruleResults: summarizeRuleResults(result.semanticDecisions),
         findings: result.findings.map(summarizeFinding),
         diffSummary: result.diffSummary, metadata: result.metadata,
       });
@@ -197,7 +202,7 @@ export async function executeMcpTool(name: string, args: unknown, engine: GitGua
       targetsResolved: report.targetsResolved ?? false, allResolved: report.allResolved ?? false,
       resolved: report.resolved || [], remaining: report.remaining || [], unknownFindings: report.unknownFindings || [],
       newFindings: newFindings.map(summarizeFinding),
-      answers: summarizeAnswers(report.semanticDecisions),
+      ruleResults: summarizeRuleResults(report.semanticDecisions),
       diffSummary: report.diffSummary, metadata: report.metadata,
     });
   } catch (error: unknown) {

@@ -144,9 +144,9 @@ describe('DefaultFindingManager', () => {
       expect(findings[0].fingerprint).toHaveLength(64);
     });
 
-    it('should attach the originating question as metadata', () => {
-      const question = {
-        id: 'missing_rollback', question: 'Does this migration lack a rollback?', level: 'review' as const, source: 'agent' as const,
+    it('should attach the originating rule as metadata', () => {
+      const rule = {
+        id: 'missing_rollback', rule: 'Migrations must have a rollback path', level: 'review' as const, source: 'agent' as const,
       };
       const ruleMatches: RuleMatch[] = [
         {
@@ -154,17 +154,17 @@ describe('DefaultFindingManager', () => {
           source: 'semantic',
           status: 'review',
           severity: 'ERROR',
-          message: 'Does this migration lack a rollback?',
+          message: 'Violates rule "Migrations must have a rollback path"',
           probability: 0.9,
           affectedFiles: ['src/auth.ts'],
           evidence: [],
           expectedEvidence: [],
-          question,
+          rule,
         },
       ];
 
       const findings = manager.createFindings(ruleMatches, mockContext);
-      expect(findings[0].metadata).toEqual({ question });
+      expect(findings[0].metadata).toEqual({ rule });
     });
   });
 

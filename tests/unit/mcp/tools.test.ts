@@ -21,9 +21,10 @@ describe('MCP tool definitions', () => {
       expect(tool.inputSchema.required).toContain('cwd');
     }
     const check = GITGUARD_MCP_TOOLS[0].inputSchema as any;
-    expect(check.properties.questions.maxItems).toBe(10);
-    expect(check.properties.questions.items.required).toEqual(['id', 'question', 'level']);
-    expect(check.properties.questions.items.properties.level.enum).toEqual(['warn', 'review', 'block']);
+    expect(check.properties.questions).toBeUndefined();
+    expect(check.properties.rules.maxItems).toBe(10);
+    expect(check.properties.rules.items.required).toEqual(['id', 'rule', 'level']);
+    expect(check.properties.rules.items.properties.level.enum).toEqual(['warn', 'review', 'block']);
   });
 
   it('sends server instructions to clients', async () => {
@@ -33,7 +34,8 @@ describe('MCP tool definitions', () => {
     const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: {} });
     await client.connect(clientTransport);
     expect(client.getInstructions()).toBe(GITGUARD_SERVER_INSTRUCTIONS);
-    expect(GITGUARD_SERVER_INSTRUCTIONS).toMatch(/Never delete or weaken questions/);
+    expect(GITGUARD_SERVER_INSTRUCTIONS).toMatch(/Never delete or weaken rules/);
+    expect(GITGUARD_SERVER_INSTRUCTIONS).toMatch(/stated plainly as what the code must or must not do/);
     await client.close();
     await server.close();
   });
@@ -49,10 +51,11 @@ describe('executeMcpTool argument validation', () => {
     ['missing cwd', 'check', {}],
     ['relative cwd', 'check', { cwd: 'repo' }],
     ['unknown property', 'check', { cwd: absoluteCwd, offline: true }],
-    ['bad question level', 'check', { cwd: absoluteCwd, questions: [{ id: 'q', question: 'x?', level: 'fatal' }] }],
-    ['bad question id', 'check', { cwd: absoluteCwd, questions: [{ id: 'Q-1', question: 'x?', level: 'warn' }] }],
-    ['extra question field', 'check', { cwd: absoluteCwd, questions: [{ id: 'q', question: 'x?', level: 'warn', source: 'config' }] }],
-    ['too many questions', 'check', { cwd: absoluteCwd, questions: Array.from({ length: 11 }, (_, i) => ({ id: `q${i}`, question: 'x?', level: 'warn' })) }],
+    ['removed questions parameter', 'check', { cwd: absoluteCwd, questions: [{ id: 'q', question: 'x?', level: 'warn' }] }],
+    ['bad rule level', 'check', { cwd: absoluteCwd, rules: [{ id: 'r', rule: 'x', level: 'fatal' }] }],
+    ['bad rule id', 'check', { cwd: absoluteCwd, rules: [{ id: 'R-1', rule: 'x', level: 'warn' }] }],
+    ['extra rule field', 'check', { cwd: absoluteCwd, rules: [{ id: 'r', rule: 'x', level: 'warn', source: 'config' }] }],
+    ['too many rules', 'check', { cwd: absoluteCwd, rules: Array.from({ length: 11 }, (_, i) => ({ id: `r${i}`, rule: 'x', level: 'warn' })) }],
     ['commit scope without target', 'check', { cwd: absoluteCwd, scope: 'commit' }],
     ['option-like target', 'check', { cwd: absoluteCwd, target: '--output=x' }],
     ['empty findingIds', 'verify', { cwd: absoluteCwd, findingIds: [] }],
@@ -88,24 +91,26 @@ describe('executeMcpTool on a real repository', () => {
     await repo.cleanup();
   });
 
-  it('returns verdict, answers and findings carrying the question text', async () => {
+  it('returns verdict, rule results and findings carrying the rule text', async () => {
     await repo.writeFile('src/app.ts', 'export const value = 1;\n');
     const result = await executeMcpTool('check', {
       cwd: repo.repoPath,
       task: 'Add value',
-      questions: [
-        { id: 'problem_validation', question: 'Does this change skip validation?', level: 'review' },
-        { id: 'fine_logging', question: 'Does this change leave debug output?', level: 'warn' },
+      rules: [
+        { id: 'violated_validation', rule: 'All external input must be validated', level: 'review' },
+        { id: 'no_debug_output', rule: 'Code must not print debug output', level: 'warn' },
       ],
     }, engine);
     const data = result.structuredContent as any;
     expect(result.isError).toBeUndefined();
     expect(data.status).toBe('REVIEW');
     expect(data.canCommit).toBe(true);
-    expect(data.answers.map((a: any) => a.id).sort()).toEqual(['fine_logging', 'problem_validation']);
+    expect(data.ruleResults.map((r: any) => [r.id, r.violated]).sort()).toEqual([
+      ['no_debug_output', false], ['violated_validation', true],
+    ]);
     expect(data.findings).toHaveLength(1);
     expect(data.findings[0]).toMatchObject({
-      ruleId: 'problem_validation', status: 'review', question: 'Does this change skip validation?', questionSource: 'agent',
+      ruleId: 'violated_validation', status: 'review', rule: 'All external input must be validated', ruleSource: 'agent',
     });
   });
 
@@ -124,13 +129,13 @@ describe('executeMcpTool on a real repository', () => {
     expect(data.unknownFindings).toEqual(['finding_missing']);
   });
 
-  it('reports engine errors such as duplicate question ids as tool errors', async () => {
-    await repo.writeFile('.gitguard.yml', 'version: 1\nquestions:\n  - id: taken\n    question: "Is it bad?"\n    level: warn\n');
+  it('reports engine errors such as duplicate rule ids as tool errors', async () => {
+    await repo.writeFile('.gitguard.yml', 'version: 1\nrules:\n  - id: taken\n    rule: "代码不得包含调试输出"\n    level: warn\n');
     await repo.writeFile('src/app.ts', 'export const value = 1;\n');
     const result = await executeMcpTool('check', {
-      cwd: repo.repoPath, questions: [{ id: 'taken', question: 'Again?', level: 'warn' }],
+      cwd: repo.repoPath, rules: [{ id: 'taken', rule: 'Again', level: 'warn' }],
     }, engine);
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Question id 'taken' is already used");
+    expect(result.content[0].text).toContain("Rule id 'taken' is already used");
   });
 });

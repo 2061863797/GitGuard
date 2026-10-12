@@ -224,7 +224,7 @@ export class DefaultFindingManager implements FindingManager {
         fingerprint,
         createdAt: timestamp,
         provenance,
-        metadata: match.question ? { question: match.question } : undefined,
+        metadata: match.rule ? { rule: match.rule } : undefined,
       };
 
       this.findingsStore.set(finding.id, finding);

@@ -42,7 +42,7 @@ export const DEFAULT_POLICY_CONFIG: PolicyConfig = {
       block_on_detection: true,
     },
   },
-  questions: [],
+  rules: [],
   privacy: {
     redact_secrets: true,
     include_full_files: false,
@@ -138,39 +138,29 @@ function containsUnsafeKeys(value: unknown): boolean {
   return keys.some((k) => containsUnsafeKeys(obj[k]));
 }
 
-/**
- * Configuration keys removed in 0.3 with migration hints.
- */
-const REMOVED_CONFIG_KEYS: Array<[string, string]> = [
-  ['rules', 'Built-in semantic rules no longer exist; express each concern as an entry under questions.'],
-  ['custom_rules', 'Move each rule to questions with id, question, level (warn|review|block) and optional files/exclude.'],
-  ['gate', 'Verdicts are fixed (BLOCK stops a commit) and semantic caching was removed; delete this section.'],
-  ['system_one.provider', 'Only the TypeSafe provider remains and offline/mock mode was removed; delete this field.'],
-];
-
-export const QUESTION_ID_PATTERN = /^[a-z0-9_]{1,64}$/;
-export const QUESTION_LEVELS = ['warn', 'review', 'block'] as const;
+export const RULE_ID_PATTERN = /^[a-z0-9_]{1,64}$/;
+export const RULE_LEVELS = ['warn', 'review', 'block'] as const;
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string' && item.trim().length > 0);
 }
 
 /**
- * Validates one question entry shared by .gitguard.yml and agent input. Returns error messages.
+ * Validates one rule entry shared by .gitguard.yml and agent input. Returns error messages.
  */
-export function validateQuestion(raw: unknown, label: string): string[] {
+export function validateRule(raw: unknown, label: string): string[] {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return [`${label} must be an object`];
   }
   const q = raw as Record<string, unknown>;
   const errors: string[] = [];
-  if (typeof q.id !== 'string' || !QUESTION_ID_PATTERN.test(q.id)) {
+  if (typeof q.id !== 'string' || !RULE_ID_PATTERN.test(q.id)) {
     errors.push(`${label}.id must match [a-z0-9_] and be at most 64 characters`);
   }
-  if (typeof q.question !== 'string' || !q.question.trim() || q.question.length > 1000) {
-    errors.push(`${label}.question must be a non-empty string of at most 1000 characters`);
+  if (typeof q.rule !== 'string' || !q.rule.trim() || q.rule.length > 1000) {
+    errors.push(`${label}.rule must be a non-empty string of at most 1000 characters`);
   }
-  if (!QUESTION_LEVELS.includes(q.level as (typeof QUESTION_LEVELS)[number])) {
+  if (!RULE_LEVELS.includes(q.level as (typeof RULE_LEVELS)[number])) {
     errors.push(`${label}.level must be one of warn, review, block`);
   }
   if (q.files !== undefined && !isStringArray(q.files)) {
@@ -180,8 +170,8 @@ export function validateQuestion(raw: unknown, label: string): string[] {
     errors.push(`${label}.exclude must be an array of glob strings`);
   }
   for (const key of Object.keys(q)) {
-    if (!['id', 'question', 'level', 'files', 'exclude'].includes(key)) {
-      errors.push(`${label}.${key} is not a supported question field`);
+    if (!['id', 'rule', 'level', 'files', 'exclude'].includes(key)) {
+      errors.push(`${label}.${key} is not a supported rule field`);
     }
   }
   return errors;
@@ -241,16 +231,6 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
     }
   }
 
-  for (const [key, hint] of REMOVED_CONFIG_KEYS) {
-    const [section, field] = key.split('.');
-    const present = field
-      ? obj[section] && typeof obj[section] === 'object' && Object.hasOwn(obj[section], field)
-      : Object.hasOwn(obj, section);
-    if (present) {
-      errors.push(`'${key}' was removed in GitGuard 0.3. ${hint}`);
-    }
-  }
-
   if (obj.deterministic?.secret_scan?.patterns !== undefined) {
     if (!Array.isArray(obj.deterministic.secret_scan.patterns)) {
       errors.push('deterministic.secret_scan.patterns must be an array of regex strings');
@@ -269,16 +249,16 @@ export function validateConfig(raw: unknown): { valid: boolean; errors: string[]
     }
   }
 
-  if (obj.questions !== undefined) {
-    if (!Array.isArray(obj.questions)) {
-      errors.push('questions must be an array');
+  if (obj.rules !== undefined) {
+    if (!Array.isArray(obj.rules)) {
+      errors.push('rules must be a list of rules (id, rule, level)');
     } else {
       const seen = new Set<string>();
-      obj.questions.forEach((question: unknown, i: number) => {
-        errors.push(...validateQuestion(question, `questions[${i}]`));
-        const id = (question as Record<string, unknown> | null)?.id;
+      obj.rules.forEach((rule: unknown, i: number) => {
+        errors.push(...validateRule(rule, `rules[${i}]`));
+        const id = (rule as Record<string, unknown> | null)?.id;
         if (typeof id === 'string') {
-          if (seen.has(id)) errors.push(`questions[${i}].id '${id}' is duplicated`);
+          if (seen.has(id)) errors.push(`rules[${i}].id '${id}' is duplicated`);
           seen.add(id);
         }
       });
@@ -334,7 +314,7 @@ export function parseConfig(yamlContent: string): PolicyConfig {
       check.enabled = true;
     }
   }
-  merged.questions = (merged.questions ?? []).map((question) => ({ ...question, source: 'config' as const }));
+  merged.rules = (merged.rules ?? []).map((rule) => ({ ...rule, source: 'config' as const }));
   return merged;
 }
 

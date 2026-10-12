@@ -2,7 +2,7 @@
   "name": "gitguard-verify",
   "version": "0.3.0",
   "private": true,
-  "description": "GitGuard MCP server and agent plugin: deterministic checks plus agent- and user-written yes/no questions before commit",
+  "description": "GitGuard MCP server and agent plugin: deterministic checks plus agent- and user-written rules before commit",
   "type": "module",
   "scripts": {
     "build": "rimraf dist && tsc",

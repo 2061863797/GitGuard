@@ -35,6 +35,17 @@ describe('Version Alignment Contract', () => {
     expect(fs.existsSync(path.resolve('plugins/gitguard/skills/gitguard/SKILL.md'))).toBe(true);
   });
 
+  it('both plugins register the commit hook from the shared hooks file', () => {
+    const codex = readJson('plugins/gitguard/.codex-plugin/plugin.json');
+    expect(codex.hooks).toBe('./hooks/hooks.json');
+    const hooks = readJson('plugins/gitguard/hooks/hooks.json');
+    const [group] = hooks.hooks.PreToolUse;
+    expect(group.matcher).toBe('Bash');
+    expect(group.hooks[0].command).toContain("'server','gitguard-hook.mjs'");
+    expect(group.hooks[0].command).toContain('process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT');
+    expect(fs.existsSync(path.resolve('plugins/gitguard/server/gitguard-hook.mjs'))).toBe(true);
+  });
+
   it('MCP server initialization reports version strictly matching GITGUARD_VERSION', async () => {
     const engine = new DefaultGitGuardEngine();
     const server = new GitGuardMcpServer({ engine });

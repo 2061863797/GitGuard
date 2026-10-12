@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Smoke test for the committed plugin bundle: start it over stdio from the plugin's
- * server directory (as Codex does), list tools, and run a question-free check on a temp repo.
+ * Smoke test for the committed plugin bundles: start the MCP server over stdio from the plugin's
+ * server directory (as Codex does), list tools, run a rule-free check on a temp repo, and run the
+ * commit hook through the exact command in hooks/hooks.json.
  */
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -51,6 +52,23 @@ try {
   assert.equal(result.isError, undefined, JSON.stringify(result.content));
   assert.equal(result.structuredContent.status, 'PASS');
   assert.equal(result.structuredContent.diffSummary.filesChanged, 1);
+
+  // Commit hook, launched exactly as the plugins do; a .gitguard.yml opts the repository in.
+  const hooks = JSON.parse(await fs.readFile(path.join(repoRoot, 'plugins', 'gitguard', 'hooks', 'hooks.json'), 'utf8'));
+  const hookCommand = hooks.hooks.PreToolUse[0].hooks[0].command;
+  const runHook = (command) => spawnSync(hookCommand, {
+    shell: true,
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: tempDir }),
+    env: { ...env, PLUGIN_ROOT: path.join(repoRoot, 'plugins', 'gitguard') },
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  await fs.writeFile(path.join(tempDir, '.gitguard.yml'), 'version: 1\n');
+  await fs.writeFile(path.join(tempDir, 'unchecked.js'), 'export const later = 2;\n');
+  assert.equal(runHook('git status').status, 0);
+  const blocked = runHook('git add -A && git commit -m x');
+  assert.equal(blocked.status, 2, blocked.stderr);
+  assert.match(blocked.stderr, /GitGuard/);
 
   process.stdout.write(`Bundle smoke test passed (GitGuard ${packageJson.version}).\n`);
 } finally {

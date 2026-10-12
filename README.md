@@ -14,12 +14,14 @@ GitGuard 只负责检查：不改代码，不执行 `git add`、`commit`、`push
 | 部分 | 内容 | 谁决定 |
 |:---|:---|:---|
 | **确定性检查** | 新增内容的密钥扫描（始终开启）；测试、lint、类型检查 | 测试、lint、类型检查的命令写在仓库的 `.gitguard.yml` 里，**没写就不执行** |
-| **agent 的题** | 针对本次任务的是/否问题，例如“是否用浮点数计算金额？” | 调用时由 agent 根据当前项目临时出题 |
-| **用户的题** | 每次都要问的是/否问题 | 写在 `.gitguard.yml` 的 `questions:` 里 |
+| **agent 的规则** | 针对本次任务的规则，例如“所有外部输入都必须经过校验” | 调用时由 agent 根据当前项目临时写 |
+| **用户的规则** | 每次都要遵守的规则，例如“金额计算不能使用浮点数” | 写在 `.gitguard.yml` 的 `rules:` 里 |
 
-agent 的题和用户的题会一起发给 [TypeSafe](https://typesafe.ai/) 的 System One（Jev）模型判断。题目都问成“问题是否存在”：回答“是”的概率 ≥ 0.5 时，按这道题的 `level` 记一个 finding。
+规则直接写成要求，不用写成问句。agent 的规则和用户的规则会一起发给 [TypeSafe](https://typesafe.ai/) 的 System One（Jev）模型，由它判断这次改动是否违反每条规则。判定违反的概率 ≥ 0.5 时，按这条规则的 `level` 记一个 finding。
 
-**不出题时不需要 API 密钥**，只跑确定性检查。出题时必须设置 `TYPESAFE_API_KEY`；如果缺少密钥或请求失败，GitGuard 会直接报错，不会用本地猜测的结果代替。
+**没有规则时不需要 API 密钥**，只跑确定性检查。有规则时必须设置 `TYPESAFE_API_KEY`；如果缺少密钥或请求失败，GitGuard 会直接报错，不会用本地猜测的结果代替。
+
+**提交前强制检查**：仓库里有 `.gitguard.yml` 时，插件自带的 hook 会在 agent 执行 `git commit` 之前做确认。最近一次检查必须覆盖了这次要提交的内容，并且结论不是 `BLOCK`，否则提交会被拦截。这只约束 agent，你自己在终端里提交不受影响。详见[提交拦截](#提交拦截)。
 
 ## 安装
 
@@ -32,7 +34,7 @@ agent 的题和用户的题会一起发给 [TypeSafe](https://typesafe.ai/) 的 
 /plugin install gitguard
 ```
 
-安装后会得到 `gitguard` MCP 服务和 `gitguard` skill。skill 告诉 agent 什么时候检查、怎么出题、怎么处理结果。
+安装后会得到 `gitguard` MCP 服务、`gitguard` skill 和提交拦截 hook。skill 告诉 agent 什么时候检查、怎么写规则、怎么处理结果。
 
 ### Codex
 
@@ -40,7 +42,7 @@ agent 的题和用户的题会一起发给 [TypeSafe](https://typesafe.ai/) 的 
 codex plugin marketplace add 2061863797/GitGuard
 ```
 
-重启 Codex，在插件列表里启用 `gitguard`。Codex 启动插件里的 MCP 服务时可能只保留少数环境变量，所以插件显式声明了转发 `TYPESAFE_API_KEY`。这个变量本身要能被 Codex 读到，见下文[设置 API 密钥](#设置-api-密钥)。
+重启 Codex，在插件列表里启用 `gitguard`。Codex 会要求你确认插件自带的 hook 后才运行它，提交拦截要在确认后才生效。Codex 启动插件里的 MCP 服务时可能只保留少数环境变量，所以插件显式声明了转发 `TYPESAFE_API_KEY`。这个变量本身要能被 Codex 读到，见下文[设置 API 密钥](#设置-api-密钥)。
 
 ### 其他 agent
 
@@ -59,6 +61,8 @@ codex plugin marketplace add 2061863797/GitGuard
 ```
 
 `env` 的写法因客户端而异，按客户端的说明转发环境变量即可。如果客户端支持 SKILL.md 格式的 skill，把 [`plugins/gitguard/skills/gitguard`](plugins/gitguard/skills/gitguard/SKILL.md) 整个目录拷进它的 skills 目录。不支持 skill 的客户端仍会通过 MCP 的 server instructions 和工具描述拿到核心规则。
+
+提交拦截依赖客户端的 PreToolUse hook。如果客户端支持同样格式的 hook（命令从 stdin 读事件 JSON，退出码 2 表示拦截），可以参照 [`plugins/gitguard/hooks/hooks.json`](plugins/gitguard/hooks/hooks.json) 配置；不支持的客户端只能靠 skill 提醒 agent 自觉检查。
 
 ## 设置 API 密钥
 
@@ -91,19 +95,21 @@ deterministic:
   typecheck:
     run: "npx tsc --noEmit"
 
-# 用户的题：每次检查都会问
-questions:
-  - id: money_float                     # 小写字母、数字、下划线
-    question: "Does this change calculate money with floating-point numbers?"
+# 用户的规则：每次检查都会判断改动是否违反
+rules:
+  - id: no_float_money                  # 小写字母、数字、下划线
+    rule: "金额计算不能使用浮点数"
     level: block                        # warn | review | block
-    files: ["src/billing/**"]           # 可选：改动没碰到这些文件就不问
+    files: ["src/billing/**"]           # 可选：改动没碰到这些文件就跳过
     exclude: ["**/*.test.ts"]           # 可选
 ```
 
-写题时注意：
+写规则时注意：
 
-- **问成“问题是否存在”**，回答“是”就表示有问题。例如问“是否缺少回滚路径？”，不要问“是否有回滚路径？”。
-- `level` 是回答“是”时的结论：
+- **直接写要求**，说清代码必须做什么或不能做什么。例如“数据库迁移必须提供回滚脚本”，不用写成问句。
+- **要具体到能从改动里判断“违反/没违反”**。例如“函数不得超过 50 行”“新增的 HTTP 接口必须校验登录态”是好规则；“代码要写得简洁”“注意安全”没有判断标准，模型只能凭感觉回答，结果不稳定。
+- 一条规则只管一件事。
+- `level` 是违反规则时的结论：
   - `warn`：提示一下；
   - `review`：需要人判断；
   - `block`：不能提交。
@@ -119,8 +125,6 @@ questions:
 
 完整示例见[本仓库自己的 `.gitguard.yml`](.gitguard.yml)。
 
-> **从 0.2 升级**：`rules`、`custom_rules`、`gate`、`system_one.provider` 已经删除。配置里还有这些字段时，检查会报错并提示怎么迁移：把 `custom_rules` 的每一条改写成 `questions` 里的一道题，其余字段直接删掉。
-
 ## MCP 工具
 
 ### `check`
@@ -131,15 +135,15 @@ questions:
 | `scope` | `all`（默认，全部未提交改动）、`staged`、`working`、`commit`、`range` |
 | `target` | 提交或范围，如 `HEAD`、`main...feature`；传了会自动推断 `scope` |
 | `task` | 任务描述，作为背景信息发给模型 |
-| `questions` | 最多 10 道题，格式同 `.gitguard.yml` 的 `questions`（不含 `source`） |
+| `rules` | 最多 10 条规则，格式同 `.gitguard.yml` 的 `rules` |
 
 返回结果中的主要字段：
 
 - `status`：检查结论。
 - `canCommit`：结论不是 `BLOCK` 时为 `true`。
 - `deterministic`：每项确定性检查的状态。
-- `answers`：每道题的回答概率和理由。
-- `findings`：每个问题的 `id`、来源题目和修复建议。
+- `ruleResults`：每条规则是否被违反（`violated`）、概率和理由。
+- `findings`：每个问题的 `id`、对应规则（`rule`、`ruleSource`）和修复建议。
 - `diffSummary`：改动统计。
 
 ### `verify`
@@ -150,7 +154,11 @@ questions:
 | `findingIds` | 之前 `check` 返回的 finding ID |
 | `scope`、`target`、`task` | 同 `check` |
 
-`verify` 会重新跑确定性检查，并重新提问当初产生这些 finding 的题目，不需要 agent 再传一遍。传入当前仓库不存在的 ID 时，会直接返回 `BLOCK` 和 `unknownFindings`，不执行任何命令，也不联网。
+`verify` 会重新跑确定性检查，并重新判断当初产生这些 finding 的规则，不需要 agent 再传一遍。传入当前仓库不存在的 ID 时，会直接返回 `BLOCK` 和 `unknownFindings`，不执行任何命令，也不联网。
+
+### 开 PR 前检查整个分支
+
+`check` 传 `target: "main...HEAD"`（把 `main` 换成你的基准分支），就会检查这个分支相对基准分支的全部改动。单次提交看不出的问题，比如几次提交累积起来的范围蔓延、前后不一致，要在这一步发现。这种按提交范围的检查不会影响提交拦截的记录。
 
 ### 结论怎么看
 
@@ -162,6 +170,26 @@ questions:
 | `BLOCK` | 不能提交，修复后用 `verify` 复验 |
 
 工具调用出错（参数无效、缺少密钥、配置有误）时返回 `isError: true` 和错误原文。`BLOCK` 是正常的检查结论，不算错误。
+
+## 提交拦截
+
+只在仓库根目录有 `.gitguard.yml` 时生效；没有这个文件的仓库不受任何影响。
+
+1. 每次 `check` 或 `verify`（范围是 `all`、`staged` 或 `working`）结束时，GitGuard 把这次检查覆盖的每个文件的内容指纹、当时的 HEAD 和检查结论，记到 `.git/gitguard/last-check.json`。指纹用的是 Git 的 blob ID，所以 Windows 下的换行符差异不会造成误判。
+2. agent 执行包含 `git commit` 的 shell 命令前，hook 会算出这次要提交的内容，并检查下面四项，任何一项不满足都会拦截（退出码 2），同时告诉 agent 该怎么做：
+   - 有检查记录；
+   - HEAD 没变；
+   - 每个要提交的文件都和检查时的内容一致；
+   - 结论不是 `BLOCK`。
+3. `REVIEW` 和 `WARN` 不拦截，交给 agent 转告你。
+
+几种写法的处理：
+- `git commit -a`：未暂存的已跟踪改动也会提交，所以这些改动也要被检查过。
+- 同一条命令里先 `git add` / `git rm` / `git mv` 再提交：因为 hook 在整条命令执行前运行，所以要求**所有**未提交的改动都被检查过。
+- `cd 目录 && git commit`、`git -C 目录 commit`：按实际仓库判断。
+- 不在 Git 仓库里、或者 Git 出错时：hook 直接放行，不影响无关命令。
+
+这个拦截只针对 agent 通过 shell 工具发起的提交，挡的是“忘了检查”，不是安全边界：你自己在终端里提交不受影响，agent 也能通过修改 hook 配置等方式绕过（skill 里已明确禁止）。
 
 ## 安全
 
@@ -182,13 +210,13 @@ pnpm bundle        # 重新生成 plugins/gitguard/server/gitguard-mcp.mjs
 pnpm test:bundle   # 从插件目录启动打包产物做冒烟测试
 ```
 
-插件安装时不会执行 `npm install`，所以打包产物 `plugins/gitguard/server/gitguard-mcp.mjs` 需要提交进仓库。改了 `src/` 后要运行 `pnpm bundle`，CI 会检查产物是否最新。
+插件安装时不会执行 `npm install`，所以打包产物 `plugins/gitguard/server/gitguard-mcp.mjs`（MCP 服务）和 `gitguard-hook.mjs`（提交拦截）需要提交进仓库。改了 `src/` 后要运行 `pnpm bundle`，CI 会检查产物是否最新。
 
 发布新版本时，要同步更新这几处的版本号：`package.json`、`src/version.ts`、`plugins/gitguard/.claude-plugin/plugin.json`、`plugins/gitguard/.codex-plugin/plugin.json`。
 
 ```text
 src/                     MCP 服务源码（引擎、Git 读取、上下文、检查、策略、finding）
-plugins/gitguard/        插件本体：两份清单、Codex 的 MCP 配置、skill、打包产物
+plugins/gitguard/        插件本体：两份清单、Codex 的 MCP 配置、skill、hook、打包产物
 .claude-plugin/          Claude Code 插件市场
 .agents/plugins/         Codex 插件市场
 ```

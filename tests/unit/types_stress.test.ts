@@ -44,7 +44,7 @@ import {
   type IFindingManager,
   type GateVerdict,
   type GateStatus,
-  type QuestionSpec,
+  type RuleSpec,
   type PolicyConfig,
   type RuleMatch,
   type PolicyEvaluationResult,
@@ -258,16 +258,16 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
       expect(lifecycles).toHaveLength(3);
     });
 
-    it('should validate QuestionSpec levels and sources', () => {
-      const question: QuestionSpec = {
+    it('should validate RuleSpec levels and sources', () => {
+      const rule: RuleSpec = {
         id: 'float_money',
-        question: 'Does this change compute money with floating point?',
+        rule: 'Money must not be computed with floating point',
         level: 'block',
         files: ['src/billing/**'],
         source: 'agent',
       };
-      expect(['warn', 'review', 'block']).toContain(question.level);
-      expect(['agent', 'config']).toContain(question.source);
+      expect(['warn', 'review', 'block']).toContain(rule.level);
+      expect(['agent', 'config']).toContain(rule.source);
     });
   });
 
@@ -416,7 +416,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
           timestamp: '2026-09-20T00:00:00Z',
           gitRoot: 'C:/Users/LXT/Desktop/GitGuard',
           headSha: 'abc1234',
-          questionsAsked: 1,
+          rulesChecked: 1,
         },
       };
 
@@ -449,12 +449,12 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
             patterns: ['AKIA[0-9A-Z]{16}'],
           },
         },
-        questions: [
+        rules: [
           {
             id: 'no_console_logs',
             files: ['src/**/*.ts'],
             exclude: ['**/*.test.ts'],
-            question: 'Does the diff contain console.log statements?',
+            rule: 'Source files must not contain console.log',
             level: 'warn',
             source: 'config',
           },
@@ -467,7 +467,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
 
       expect(policy.version).toBe(1);
       expect(policy.deterministic?.test?.enabled).toBe(true);
-      expect(policy.questions?.[0].id).toBe('no_console_logs');
+      expect(policy.rules?.[0].id).toBe('no_console_logs');
     });
   });
 
@@ -606,7 +606,7 @@ describe('Milestone M0 Stress & Contract Soundness Verification', () => {
         evaluate(
           _deterministicResults: DeterministicResult[],
           _semanticDecisions: SemanticDecision[],
-          _questions: QuestionSpec[],
+          _rules: RuleSpec[],
           _policy: PolicyConfig,
           _context: EvaluationContext
         ): PolicyEvaluationResult {

@@ -1,0 +1,17 @@
+{
+  "description": "GitGuard commit gate: in repositories with a .gitguard.yml, block agent git commits that the last GitGuard check did not cover or that it marked BLOCK.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"import(require('node:url').pathToFileURL(require('node:path').join(process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT,'server','gitguard-hook.mjs')).href)\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

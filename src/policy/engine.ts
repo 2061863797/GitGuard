@@ -1,7 +1,7 @@
 /**
  * src/policy/engine.ts
  * DefaultPolicyEngine implementing the PolicyEngine interface for GitGuard.
- * Combines deterministic outputs with System One answers to the asked questions
+ * Combines deterministic outputs with System One's judgments of the checked rules
  * and synthesizes the gate verdict using the worst-case hierarchy: BLOCK > REVIEW > WARN > PASS.
  */
 
@@ -10,7 +10,7 @@ import type {
   PolicyConfig,
   PolicyEngine,
   PolicyEvaluationResult,
-  QuestionSpec,
+  RuleSpec,
   RuleMatch,
 } from '../types/policy.js';
 import type { DeterministicResult, SemanticDecision } from '../types/provider.js';
@@ -19,8 +19,8 @@ import type { FindingManager } from '../types/finding.js';
 import { DefaultFindingManager } from '../findings/manager.js';
 import {
   evaluateDeterministicCheck,
-  evaluateQuestion,
-  questionAppliesTo,
+  evaluateRule,
+  ruleAppliesTo,
   synthesizeGateVerdict,
 } from './rules.js';
 
@@ -41,12 +41,12 @@ export class DefaultPolicyEngine implements PolicyEngine {
   }
 
   /**
-   * Evaluates deterministic results and answers to the asked questions.
+   * Evaluates deterministic results and System One's judgments of the checked rules.
    */
   public evaluate(
     deterministicResults: DeterministicResult[],
     semanticDecisions: SemanticDecision[],
-    questions: QuestionSpec[],
+    rules: RuleSpec[],
     policy: PolicyConfig,
     context: EvaluationContext
   ): PolicyEvaluationResult {
@@ -66,20 +66,20 @@ export class DefaultPolicyEngine implements PolicyEngine {
       }
     }
 
-    // 2. Answers to agent and config questions
+    // 2. Judgments of agent and config rules
     const decisionMap = new Map((semanticDecisions || []).map((decision) => [decision.id, decision]));
-    for (const question of questions || []) {
-      const decision = decisionMap.get(question.id);
-      const affectedFiles = questionAppliesTo(question, changedFiles);
+    for (const rule of rules || []) {
+      const decision = decisionMap.get(rule.id);
+      const affectedFiles = ruleAppliesTo(rule, changedFiles);
       if (!decision || !affectedFiles) {
         continue;
       }
-      const match = evaluateQuestion(decision, question, affectedFiles);
+      const match = evaluateRule(decision, rule, affectedFiles);
       if (match) {
         ruleMatches.push(match);
-        violatedRulesSet.add(question.id);
+        violatedRulesSet.add(rule.id);
       } else {
-        passedRulesSet.add(question.id);
+        passedRulesSet.add(rule.id);
       }
     }
 
@@ -94,7 +94,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
     if (verdict === 'PASS') {
       summary = !context.diff?.raw?.trim() && changedFiles.length === 0
         ? 'Clean changeset with zero modifications. Gate verdict: PASS.'
-        : `Gate verdict: PASS. All ${passedRulesSet.size} evaluated check(s) and question(s) passed.`;
+        : `Gate verdict: PASS. All ${passedRulesSet.size} evaluated check(s) and rule(s) passed.`;
     } else {
       const violatedList = Array.from(violatedRulesSet).join(', ');
       summary = `Gate verdict: ${verdict}. Detected ${ruleMatches.length} issue(s) [${violatedList}].`;
